@@ -33,14 +33,14 @@ Official companion GNOME Shell extension for the [Adwaita Colors](https://github
 Search for **Adwaita Colors Home** on [extensions.gnome.org](https://extensions.gnome.org), or install manually:
 
 ```bash
-git clone https://github.com/dpejoh/Adwaita-Colors-Home
+git clone https://github.com/dpejoh/Adwaita-Colors-Home adwaita-colors-home@dpejoh
 cp -r adwaita-colors-home@dpejoh ~/.local/share/gnome-shell/extensions/
 glib-compile-schemas ~/.local/share/gnome-shell/extensions/adwaita-colors-home@dpejoh/schemas/
+```
+Log out and back then run
+```bash
 gnome-extensions enable adwaita-colors-home@dpejoh
 ```
-
-On Wayland, log out and back in after enabling.
-
 ---
 
 ## MoreWaita Integration
