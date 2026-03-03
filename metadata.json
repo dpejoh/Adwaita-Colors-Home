@@ -1,10 +1,8 @@
 {
-  "uuid": "adwaita-colors-home@dpejoh",
-  "name": "Adwaita Colors Home",
-  "description": "Official companion extension for the Adwaita Colors icon theme. Auto-syncs your icon theme with your GNOME accent color, manages installation, and checks for updates.",
-  "version": 1,
-  "shell-version": ["47", "48", "49", "50"],
-  "url": "https://github.com/dpejoh/Adwaita-colors",
-  "settings-schema": "org.gnome.shell.extensions.adwaita-colors-home",
-  "gettext-domain": "adwaita-colors-home"
+    "uuid": "adwaita-colors-home@dpejoh",
+    "name": "Adwaita Colors Home",
+    "description": "Syncs your icon theme with your GNOME accent color. Manages installation and updates for the Adwaita Colors icon theme.",
+    "shell-version": ["47", "48", "49", "50"],
+    "url": "https://github.com/dpejoh/Adwaita-colors",
+    "settings-schema": "org.gnome.shell.extensions.adwaita-colors-home"
 }

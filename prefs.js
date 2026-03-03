@@ -1,24 +1,3 @@
-/**
- * Adwaita Colors Home — prefs.js
- *
- * Full libadwaita preferences UI with three pages:
- *   • General      — auto-sync toggle, manual color picker, status rows
- *   • Installation — install/update/uninstall actions with progress UI
- *   • About        — credits, version info, manual update check
- *
- * All network and filesystem operations are async; the UI never blocks.
- *
- * Fixes vs v1:
- *  - Adw.Banner now added via window.add_banner() (not inside a group)
- *  - "Install Now" button correctly navigates to the Installation page
- *  - Extraction uses Python 3's zipfile module (always present on Fedora/GNOME)
- *    instead of `unzip` which is not installed by default
- *  - Extracted directory is discovered dynamically (not hardcoded)
- *  - subprocess uses wait_check_async — non-zero exits surface as real errors
- *  - Gdk removed; URLs opened via Gio.AppInfo.launch_default_for_uri_async
- *  - _findDownloader bug fixed (double call removed)
- */
-
 import GLib from 'gi://GLib';
 import GObject from 'gi://GObject';
 import Gio from 'gi://Gio';
@@ -27,8 +6,6 @@ import Adw from 'gi://Adw';
 import Soup from 'gi://Soup';
 
 import { ExtensionPreferences } from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
-
-// ─── Constants ────────────────────────────────────────────────────────────────
 
 const ALL_COLORS = [
     'blue', 'brown', 'green', 'orange', 'pink',
@@ -62,16 +39,20 @@ const ICON_PATHS = [
     '/usr/share/icons',
 ];
 
-const GITHUB_API_URL =
-    'https://api.github.com/repos/dpejoh/Adwaita-colors/releases/latest';
-const GITHUB_RELEASES_URL =
-    'https://github.com/dpejoh/Adwaita-colors/releases/latest';
-const GITHUB_PAGE_URL =
-    'https://github.com/dpejoh/Adwaita-colors';
-const GITHUB_ISSUES_URL =
-    'https://github.com/dpejoh/Adwaita-colors/issues';
+const MOREWAITA_PATHS = [
+    GLib.get_home_dir() + '/.local/share/icons/MoreWaita',
+    GLib.get_home_dir() + '/.icons/MoreWaita',
+    '/usr/local/share/icons/MoreWaita',
+    '/var/usrlocal/share/icons/MoreWaita',
+    '/usr/share/icons/MoreWaita',
+];
 
-// ─── Utilities ────────────────────────────────────────────────────────────────
+const GITHUB_API_URL         = 'https://api.github.com/repos/dpejoh/Adwaita-colors/releases/latest';
+const GITHUB_RELEASES_URL    = 'https://github.com/dpejoh/Adwaita-colors/releases/latest';
+const GITHUB_PAGE_URL        = 'https://github.com/dpejoh/Adwaita-colors';
+const GITHUB_ISSUES_URL      = 'https://github.com/dpejoh/Adwaita-colors/issues';
+const GITHUB_HOME_ISSUES_URL = 'https://github.com/dpejoh/Adwaita-Colors-Home/issues';
+const MOREWAITA_URL          = 'https://github.com/somepaulo/MoreWaita';
 
 function detectInstallation() {
     const installedColors = [];
@@ -79,35 +60,40 @@ function detectInstallation() {
 
     for (const base of ICON_PATHS) {
         for (const color of ALL_COLORS) {
-            const idx = `${base}/Adwaita-${color}/index.theme`;
-            if (GLib.file_test(idx, GLib.FileTest.EXISTS)) {
+            if (GLib.file_test(`${base}/Adwaita-${color}/index.theme`, GLib.FileTest.EXISTS)) {
                 if (!firstPath) firstPath = base;
                 if (!installedColors.includes(color)) installedColors.push(color);
             }
         }
     }
 
-    return {
-        installed: installedColors.length > 0,
-        path: firstPath,
-        installedColors,
-    };
+    return { installed: installedColors.length > 0, path: firstPath, installedColors };
+}
+
+function detectMoreWaita() {
+    for (const base of MOREWAITA_PATHS) {
+        if (GLib.file_test(`${base}/index.theme`, GLib.FileTest.EXISTS)) {
+            const installBase = base.slice(0, base.lastIndexOf('/'));
+            return { found: true, path: base, installBase };
+        }
+    }
+    return { found: false, path: null, installBase: null };
 }
 
 function detectDistroType() {
-    if (GLib.file_test('/run/ostree-booted', GLib.FileTest.EXISTS)) return 'atomic';
-
+    if (GLib.file_test('/run/ostree-booted', GLib.FileTest.EXISTS))
+        return 'atomic';
     try {
         const [, data] = GLib.file_get_contents('/etc/os-release');
-        const text = new TextDecoder().decode(data);
-        if (/VARIANT_ID=(silverblue|kinoite|sericea|onyx)/i.test(text)) return 'atomic';
-    } catch (_) { /* non-fatal */ }
-
+        if (/VARIANT_ID=(silverblue|kinoite|sericea|onyx)/i.test(new TextDecoder().decode(data)))
+            return 'atomic';
+    } catch (_) {}
     return 'standard';
 }
 
 function resolveInstallPath(scope, distroType) {
-    if (scope === 'user') return GLib.get_home_dir() + '/.local/share/icons';
+    if (scope === 'user')
+        return GLib.get_home_dir() + '/.local/share/icons';
     return distroType === 'atomic' ? '/var/usrlocal/share/icons' : '/usr/share/icons';
 }
 
@@ -123,20 +109,19 @@ function isNewer(candidate, installed) {
     return cc > ic;
 }
 
-/** Open a URI with the system default handler — no Gdk import needed. */
 function openUri(uri) {
     Gio.AppInfo.launch_default_for_uri_async(uri, null, null, null);
 }
 
-/** Small circular color swatch as a Gtk.DrawingArea. */
 function makeColorDot(hex, size = 16) {
     const area = new Gtk.DrawingArea({ width_request: size, height_request: size });
     area.set_draw_func((_w, cr) => {
-        const r = parseInt(hex.slice(1, 3), 16) / 255;
-        const g = parseInt(hex.slice(3, 5), 16) / 255;
-        const b = parseInt(hex.slice(5, 7), 16) / 255;
         cr.arc(size / 2, size / 2, size / 2 - 1, 0, 2 * Math.PI);
-        cr.setSourceRGB(r, g, b);
+        cr.setSourceRGB(
+            parseInt(hex.slice(1, 3), 16) / 255,
+            parseInt(hex.slice(3, 5), 16) / 255,
+            parseInt(hex.slice(5, 7), 16) / 255
+        );
         cr.fillPreserve();
         cr.setSourceRGBA(0, 0, 0, 0.25);
         cr.setLineWidth(1);
@@ -145,35 +130,31 @@ function makeColorDot(hex, size = 16) {
     return area;
 }
 
-// ─── Main Preferences Class ───────────────────────────────────────────────────
+function needsPrivileges(path) {
+    return path.startsWith('/usr/') ||
+           path.startsWith('/var/usrlocal/') ||
+           path.startsWith('/usr/local/');
+}
 
 export default class AdwaitaColorsPreferences extends ExtensionPreferences {
-
     fillPreferencesWindow(window) {
         this._settings        = this.getSettings();
         this._desktopSettings = new Gio.Settings({ schema_id: 'org.gnome.desktop.interface' });
         this._window          = window;
         this._distroType      = detectDistroType();
         this._installation    = detectInstallation();
-        this._hasAccentColor  = this._desktopSettings
-            .settings_schema.has_key('accent-color');
+        this._morewaita       = detectMoreWaita();
+        this._hasAccentColor  = this._desktopSettings.settings_schema.has_key('accent-color');
 
         window.set_default_size(680, 680);
         window.set_title('Adwaita Colors Home');
 
-        // Build pages — _installPage must exist before the banner callback runs
-        const generalPage     = this._buildGeneralPage();
-        this._installPage     = this._buildInstallationPage();
-        const aboutPage       = this._buildAboutPage();
+        this._installPage = this._buildInstallationPage();
 
-        window.add(generalPage);
+        window.add(this._buildGeneralPage());
         window.add(this._installPage);
-        window.add(aboutPage);
+        window.add(this._buildAboutPage());
     }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // PAGE 1 — General
-    // ─────────────────────────────────────────────────────────────────────────
 
     _buildGeneralPage() {
         const page = new Adw.PreferencesPage({
@@ -181,7 +162,6 @@ export default class AdwaitaColorsPreferences extends ExtensionPreferences {
             icon_name: 'preferences-system-symbolic',
         });
 
-        // ── Not-installed notice (compatible with all GNOME 47+ builds) ───────
         if (!this._installation.installed) {
             const notInstalledGroup = new Adw.PreferencesGroup();
             const bannerRow = new Adw.ActionRow({
@@ -189,10 +169,7 @@ export default class AdwaitaColorsPreferences extends ExtensionPreferences {
                 subtitle: 'Open the Installation tab to download and install it.',
                 css_classes: ['warning'],
             });
-            bannerRow.add_prefix(new Gtk.Image({
-                icon_name: 'dialog-warning-symbolic',
-                pixel_size: 32,
-            }));
+            bannerRow.add_prefix(new Gtk.Image({ icon_name: 'dialog-warning-symbolic', pixel_size: 32 }));
             const installBtn = new Gtk.Button({
                 label: 'Install Now',
                 css_classes: ['suggested-action'],
@@ -207,13 +184,11 @@ export default class AdwaitaColorsPreferences extends ExtensionPreferences {
             page.add(notInstalledGroup);
         }
 
-        // ── Group: Icon Theme ──────────────────────────────────────────────
         const themeGroup = new Adw.PreferencesGroup({
             title: 'Icon Theme',
             description: 'Control how Adwaita Colors syncs with your desktop accent color.',
         });
 
-        // Active variant indicator row
         const activeRow = new Adw.ActionRow({ title: 'Active Variant' });
         this._activeColorDot   = makeColorDot('#3584e4', 18);
         this._activeColorLabel = new Gtk.Label({ label: 'Blue' });
@@ -223,18 +198,15 @@ export default class AdwaitaColorsPreferences extends ExtensionPreferences {
         activeRow.add_suffix(activeBox);
         themeGroup.add(activeRow);
 
-        // GNOME < 47 warning
         if (!this._hasAccentColor) {
             const noAccentRow = new Adw.ActionRow({
                 title: 'Auto-sync unavailable',
                 subtitle: 'GNOME 47 or newer is required for accent color support.',
             });
-            noAccentRow.add_prefix(
-                new Gtk.Image({ icon_name: 'dialog-warning-symbolic' }));
+            noAccentRow.add_prefix(new Gtk.Image({ icon_name: 'dialog-warning-symbolic' }));
             themeGroup.add(noAccentRow);
         }
 
-        // Auto-sync switch
         const syncRow = new Adw.SwitchRow({
             title: 'Auto-sync with GNOME Accent Color',
             subtitle: 'Automatically switch the icon theme when you change your accent color.',
@@ -243,7 +215,6 @@ export default class AdwaitaColorsPreferences extends ExtensionPreferences {
         this._settings.bind('auto-sync', syncRow, 'active', Gio.SettingsBindFlags.DEFAULT);
         themeGroup.add(syncRow);
 
-        // Manual color combo (disabled when auto-sync is on)
         const colorRow = new Adw.ComboRow({
             title: 'Icon Color',
             subtitle: 'Only active when auto-sync is off.',
@@ -253,8 +224,7 @@ export default class AdwaitaColorsPreferences extends ExtensionPreferences {
         colorRow.model = colorModel;
 
         const syncSelection = () => {
-            const color = this._settings.get_string('manual-color');
-            const idx   = ALL_COLORS.indexOf(color);
+            const idx = ALL_COLORS.indexOf(this._settings.get_string('manual-color'));
             if (idx >= 0 && colorRow.selected !== idx) colorRow.selected = idx;
         };
         syncSelection();
@@ -268,7 +238,7 @@ export default class AdwaitaColorsPreferences extends ExtensionPreferences {
             colorRow.sensitive = !this._settings.get_boolean('auto-sync');
             this._refreshActiveColorRow();
         };
-        this._settings.connect('changed::auto-sync',    updateSensitivity);
+        this._settings.connect('changed::auto-sync', updateSensitivity);
         this._settings.connect('changed::manual-color', () => {
             syncSelection();
             this._refreshActiveColorRow();
@@ -276,18 +246,15 @@ export default class AdwaitaColorsPreferences extends ExtensionPreferences {
         updateSensitivity();
         themeGroup.add(colorRow);
 
-        // Panel indicator toggle
         const indicatorRow = new Adw.SwitchRow({
             title: 'Show Panel Color Indicator',
             subtitle: 'Display a colored circle in the top bar for quick color switching.',
         });
-        this._settings.bind(
-            'show-panel-indicator', indicatorRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+        this._settings.bind('show-panel-indicator', indicatorRow, 'active', Gio.SettingsBindFlags.DEFAULT);
         themeGroup.add(indicatorRow);
 
         page.add(themeGroup);
 
-        // ── Group: Status ──────────────────────────────────────────────────
         const statusGroup = new Adw.PreferencesGroup({ title: 'Status' });
 
         const installRow = new Adw.ActionRow({ title: 'Installation' });
@@ -299,23 +266,18 @@ export default class AdwaitaColorsPreferences extends ExtensionPreferences {
             installRow.add_prefix(
                 new Gtk.Image({ icon_name: 'emblem-ok-symbolic', css_classes: ['success'] }));
         } else {
-            installRow.subtitle = 'Not installed — go to the Installation tab.';
+            installRow.subtitle = 'Not installed, go to the Installation tab.';
             installRow.add_prefix(
                 new Gtk.Image({ icon_name: 'dialog-warning-symbolic', css_classes: ['warning'] }));
         }
         statusGroup.add(installRow);
 
-        // Update status row — populated asynchronously
-        this._updateStatusRow = new Adw.ActionRow({
-            title: 'Updates',
-            subtitle: 'Checking…',
-        });
+        this._updateStatusRow = new Adw.ActionRow({ title: 'Updates', subtitle: 'Checking…' });
         this._updateStatusRow.add_prefix(
             new Gtk.Image({ icon_name: 'software-update-available-symbolic' }));
         statusGroup.add(this._updateStatusRow);
         page.add(statusGroup);
 
-        // Kick off async tasks after the widget tree is ready
         GLib.idle_add(GLib.PRIORITY_LOW, () => {
             this._refreshUpdateStatusRow();
             return GLib.SOURCE_REMOVE;
@@ -339,7 +301,6 @@ export default class AdwaitaColorsPreferences extends ExtensionPreferences {
         const meta = COLOR_META[color] ?? COLOR_META.blue;
         this._activeColorLabel.label = meta.label;
 
-        // Swap out the dot with a freshly colored one
         const parent = this._activeColorDot?.get_parent();
         if (parent) {
             const newDot = makeColorDot(meta.hex, 18);
@@ -351,9 +312,9 @@ export default class AdwaitaColorsPreferences extends ExtensionPreferences {
 
     _refreshUpdateStatusRow() {
         const installed = this._settings.get_string('installed-version');
-        const session   = new Soup.Session();
-        const msg       = Soup.Message.new('GET', GITHUB_API_URL);
-        msg.request_headers.append('User-Agent', 'adwaita-colors-home-prefs/1');
+        const session = new Soup.Session();
+        const msg = Soup.Message.new('GET', GITHUB_API_URL);
+        msg.request_headers.append('User-Agent', 'adwaita-colors-home/1');
 
         session.send_and_read_async(msg, GLib.PRIORITY_LOW, null, (sess, result) => {
             try {
@@ -362,8 +323,7 @@ export default class AdwaitaColorsPreferences extends ExtensionPreferences {
                 const latest = json.tag_name;
 
                 if (!installed) {
-                    this._updateStatusRow.subtitle =
-                        `Latest release: ${latest} (not tracked — install via the Installation tab)`;
+                    this._updateStatusRow.subtitle = `Latest release: ${latest}`;
                     return;
                 }
 
@@ -376,8 +336,7 @@ export default class AdwaitaColorsPreferences extends ExtensionPreferences {
                         valign: Gtk.Align.CENTER,
                     });
                     btn.connect('clicked', () => {
-                        this._startInstall(
-                            this._settings.get_string('install-scope'), latest);
+                        this._startInstall(this._settings.get_string('install-scope'), latest);
                         this._window.set_visible_page(this._installPage);
                     });
                     this._updateStatusRow.add_suffix(btn);
@@ -385,15 +344,10 @@ export default class AdwaitaColorsPreferences extends ExtensionPreferences {
                     this._updateStatusRow.subtitle = `Up to date (${installed})`;
                 }
             } catch (_) {
-                this._updateStatusRow.subtitle =
-                    'Could not check for updates (network unavailable)';
+                this._updateStatusRow.subtitle = 'Could not check for updates';
             }
         });
     }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // PAGE 2 — Installation
-    // ─────────────────────────────────────────────────────────────────────────
 
     _buildInstallationPage() {
         const page = new Adw.PreferencesPage({
@@ -404,14 +358,11 @@ export default class AdwaitaColorsPreferences extends ExtensionPreferences {
 
         const isAtomic = this._distroType === 'atomic';
 
-        // ── Group: Install Location ────────────────────────────────────────
         const locationGroup = new Adw.PreferencesGroup({
             title: 'Install Location',
             description: isAtomic
-                ? 'Running on an atomic/ostree desktop. System installs use ' +
-                  '/var/usrlocal/share/icons (persists across OS updates). User installs are recommended.'
-                : 'System installs require an administrator password (pkexec). ' +
-                  'User installs are always available without extra permissions.',
+                ? 'Running on an atomic/ostree desktop. System installs use /var/usrlocal/share/icons (persists across OS updates). User installs are recommended.'
+                : 'System installs require an administrator password (pkexec). User installs are always available without extra permissions.',
         });
 
         if (this._installation.installed) {
@@ -428,7 +379,7 @@ export default class AdwaitaColorsPreferences extends ExtensionPreferences {
         scopeModel.append('User  (~/.local/share/icons)');
         scopeModel.append(isAtomic
             ? 'System  (/var/usrlocal/share/icons)'
-            : 'System  (/usr/share/icons — needs sudo)');
+            : 'System  (/usr/share/icons, needs sudo)');
         scopeRow.model = scopeModel;
         scopeRow.selected = this._settings.get_string('install-scope') === 'system' ? 1 : 0;
         scopeRow.connect('notify::selected', () => {
@@ -438,10 +389,8 @@ export default class AdwaitaColorsPreferences extends ExtensionPreferences {
         locationGroup.add(scopeRow);
         page.add(locationGroup);
 
-        // ── Group: Actions ─────────────────────────────────────────────────
         const actionsGroup = new Adw.PreferencesGroup({ title: 'Actions' });
 
-        // Progress row — hidden until an install starts
         this._progressRow = new Adw.ActionRow({ title: 'Progress', visible: false });
         this._progressBar = new Gtk.ProgressBar({
             valign: Gtk.Align.CENTER,
@@ -451,16 +400,12 @@ export default class AdwaitaColorsPreferences extends ExtensionPreferences {
         this._progressRow.add_suffix(this._progressBar);
         actionsGroup.add(this._progressRow);
 
-        // Status row
         this._installStatusRow = new Adw.ActionRow({
             title: 'Status',
-            subtitle: this._installation.installed
-                ? 'Adwaita Colors is installed.'
-                : 'Not installed.',
+            subtitle: this._installation.installed ? 'Adwaita Colors is installed.' : 'Not installed.',
         });
         actionsGroup.add(this._installStatusRow);
 
-        // Install / Reinstall button
         const installBtn = new Gtk.Button({
             label: this._installation.installed ? 'Reinstall' : 'Install for me',
             css_classes: ['suggested-action'],
@@ -473,14 +418,12 @@ export default class AdwaitaColorsPreferences extends ExtensionPreferences {
         installBtnRow.add_suffix(installBtn);
         actionsGroup.add(installBtnRow);
 
-        // Open GitHub button
         const githubBtn = new Gtk.Button({ label: 'Open on GitHub', valign: Gtk.Align.CENTER });
         githubBtn.connect('clicked', () => openUri(GITHUB_PAGE_URL));
         const githubRow = new Adw.ActionRow({ title: 'Manual Download' });
         githubRow.add_suffix(githubBtn);
         actionsGroup.add(githubRow);
 
-        // Uninstall button — always visible, disabled when nothing is installed
         const uninstallBtn = new Gtk.Button({
             label: 'Uninstall',
             css_classes: ['destructive-action'],
@@ -494,36 +437,240 @@ export default class AdwaitaColorsPreferences extends ExtensionPreferences {
 
         page.add(actionsGroup);
 
-        // ── Group: MoreWaita Integration ───────────────────────────────────
-        const mwPaths = [
-            `${GLib.get_home_dir()}/.local/share/icons/MoreWaita/index.theme`,
-            '/usr/share/icons/MoreWaita/index.theme',
-        ];
-        if (mwPaths.some(p => GLib.file_test(p, GLib.FileTest.EXISTS))) {
-            const mwGroup = new Adw.PreferencesGroup({
-                title: 'MoreWaita Integration',
-                description:
-                    'MoreWaita is installed. Patching the Adwaita Colors index.theme files ' +
-                    'adds MoreWaita to the icon inheritance chain for broader icon coverage.',
-            });
-            const mwBtn = new Gtk.Button({
-                label: 'Patch index.theme files',
-                valign: Gtk.Align.CENTER,
-            });
-            mwBtn.connect('clicked', () => this._applyMoreWaitaPatch());
-            const mwRow = new Adw.ActionRow({
-                title: 'Add MoreWaita to Inherits chain',
-                subtitle: 'Result: Inherits=MoreWaita,Adwaita,AdwaitaLegacy,hicolor',
-            });
-            mwRow.add_suffix(mwBtn);
-            mwGroup.add(mwRow);
-            page.add(mwGroup);
-        }
+        // MoreWaita integration group, always visible
+        page.add(this._buildMoreWaitaGroup());
 
         return page;
     }
 
-    // ── Install Flow ──────────────────────────────────────────────────────────
+    _buildMoreWaitaGroup() {
+        const mw = this._morewaita;
+
+        const group = new Adw.PreferencesGroup({
+            title: 'MoreWaita Integration',
+            description: mw.found
+                ? 'MoreWaita is installed. Patching the Adwaita Colors index.theme files adds MoreWaita to the icon inheritance chain, giving you broader icon coverage on top of the accent color variants.'
+                : 'MoreWaita extends Adwaita with many additional icons. Install it first, then come back here to patch the Adwaita Colors themes so they inherit from it.',
+        });
+
+        const statusRow = new Adw.ActionRow({ title: 'MoreWaita Status' });
+        if (mw.found) {
+            statusRow.subtitle = `Installed at ${mw.path}`;
+            statusRow.add_prefix(new Gtk.Image({
+                icon_name: 'emblem-ok-symbolic',
+                css_classes: ['success'],
+            }));
+        } else {
+            statusRow.subtitle = 'Not found in any standard icon directory';
+            statusRow.add_prefix(new Gtk.Image({ icon_name: 'dialog-information-symbolic' }));
+            const mwLinkBtn = new Gtk.Button({ label: 'Get MoreWaita', valign: Gtk.Align.CENTER });
+            mwLinkBtn.connect('clicked', () => openUri(MOREWAITA_URL));
+            statusRow.add_suffix(mwLinkBtn);
+        }
+        group.add(statusRow);
+
+        if (mw.found) {
+            this._mwStatusRow = new Adw.ActionRow({
+                title: 'Patch Status',
+                subtitle: this._getMoreWaitaPatchStatus(),
+            });
+            group.add(this._mwStatusRow);
+
+            const detailRow = new Adw.ActionRow({
+                title: 'Inherits chain after patching',
+                subtitle: 'Inherits=MoreWaita,Adwaita,AdwaitaLegacy,hicolor',
+            });
+            group.add(detailRow);
+
+            const patchBtn = new Gtk.Button({
+                label: 'Patch index.theme files',
+                valign: Gtk.Align.CENTER,
+            });
+            patchBtn.connect('clicked', () => {
+                this._applyMoreWaitaPatch();
+                if (this._mwStatusRow)
+                    this._mwStatusRow.subtitle = this._getMoreWaitaPatchStatus();
+            });
+            const patchRow = new Adw.ActionRow({ title: 'Add MoreWaita to Inherits chain' });
+            patchRow.add_suffix(patchBtn);
+            group.add(patchRow);
+
+            const unpatchBtn = new Gtk.Button({
+                label: 'Remove patch',
+                valign: Gtk.Align.CENTER,
+            });
+            unpatchBtn.connect('clicked', () => {
+                this._removeMoreWaitaPatch();
+                if (this._mwStatusRow)
+                    this._mwStatusRow.subtitle = this._getMoreWaitaPatchStatus();
+            });
+            const unpatchRow = new Adw.ActionRow({ title: 'Remove MoreWaita from Inherits chain' });
+            unpatchRow.add_suffix(unpatchBtn);
+            group.add(unpatchRow);
+        }
+
+        return group;
+    }
+
+    _getMoreWaitaPatchStatus() {
+        if (!this._installation.installed)
+            return 'Adwaita Colors not installed, nothing to patch yet';
+
+        const base = this._installation.path;
+        let patched = 0;
+        let total = 0;
+
+        for (const color of ALL_COLORS) {
+            const indexPath = `${base}/Adwaita-${color}/index.theme`;
+            if (!GLib.file_test(indexPath, GLib.FileTest.EXISTS)) continue;
+            total++;
+            try {
+                const [, data] = GLib.file_get_contents(indexPath);
+                if (new TextDecoder().decode(data).includes('MoreWaita')) patched++;
+            } catch (_) {}
+        }
+
+        if (total === 0) return 'No Adwaita Colors variants found at install path';
+        if (patched === 0) return `Not patched (${total} variants available)`;
+        if (patched === total) return `Patched, all ${total} variants`;
+        return `Partially patched (${patched} of ${total} variants)`;
+    }
+
+    _applyMoreWaitaPatch() {
+        const base = this._installation.path;
+        if (!base) {
+            this._setInstallStatus('Cannot patch: Adwaita Colors is not installed.');
+            return;
+        }
+
+        if (needsPrivileges(base)) {
+            const patchScript = `
+import sys, re
+from pathlib import Path
+
+base = Path(sys.argv[1])
+patched = 0
+for variant in base.iterdir():
+    if not (variant.is_dir() and variant.name.startswith('Adwaita-')):
+        continue
+    index = variant / 'index.theme'
+    if not index.exists():
+        continue
+    text = index.read_text()
+    if 'MoreWaita' in text:
+        continue
+    text = re.sub(r'^(Inherits=)', r'Inherits=MoreWaita,', text, count=1, flags=re.MULTILINE)
+    index.write_text(text)
+    patched += 1
+print(patched)
+`;
+            const pythonBin = GLib.find_program_in_path('python3');
+            if (!pythonBin) {
+                this._setInstallStatus('Cannot patch: python3 not found.');
+                return;
+            }
+            const args = this._escalate(['python3', '-c', patchScript, base], base);
+            this._runSubprocessWithOutput(args)
+                .then(out => {
+                    const n = parseInt(out.trim(), 10);
+                    this._setInstallStatus(
+                        n > 0
+                            ? `MoreWaita patch applied to ${n} variant(s).`
+                            : 'All variants were already patched.');
+                })
+                .catch(err => {
+                    this._setInstallStatus(`Patch failed: ${err.message ?? err}`);
+                });
+            return;
+        }
+
+        let patched = 0;
+        for (const color of ALL_COLORS) {
+            const indexPath = `${base}/Adwaita-${color}/index.theme`;
+            if (!GLib.file_test(indexPath, GLib.FileTest.EXISTS)) continue;
+            try {
+                const [, data] = GLib.file_get_contents(indexPath);
+                let text = new TextDecoder().decode(data);
+                if (text.includes('MoreWaita')) continue;
+                text = text.replace(/^(Inherits=)/m, 'Inherits=MoreWaita,');
+                GLib.file_set_contents(indexPath, new TextEncoder().encode(text));
+                patched++;
+            } catch (_) {}
+        }
+
+        this._setInstallStatus(
+            patched > 0
+                ? `MoreWaita patch applied to ${patched} variant(s).`
+                : 'All variants were already patched.');
+    }
+
+    _removeMoreWaitaPatch() {
+        const base = this._installation.path;
+        if (!base) {
+            this._setInstallStatus('Cannot unpatch: Adwaita Colors is not installed.');
+            return;
+        }
+
+        if (needsPrivileges(base)) {
+            const unpatchScript = `
+import sys, re
+from pathlib import Path
+
+base = Path(sys.argv[1])
+removed = 0
+for variant in base.iterdir():
+    if not (variant.is_dir() and variant.name.startswith('Adwaita-')):
+        continue
+    index = variant / 'index.theme'
+    if not index.exists():
+        continue
+    text = index.read_text()
+    if 'MoreWaita' not in text:
+        continue
+    text = re.sub(r'MoreWaita,', '', text)
+    index.write_text(text)
+    removed += 1
+print(removed)
+`;
+            const pythonBin = GLib.find_program_in_path('python3');
+            if (!pythonBin) {
+                this._setInstallStatus('Cannot unpatch: python3 not found.');
+                return;
+            }
+            const args = this._escalate(['python3', '-c', unpatchScript, base], base);
+            this._runSubprocessWithOutput(args)
+                .then(out => {
+                    const n = parseInt(out.trim(), 10);
+                    this._setInstallStatus(
+                        n > 0
+                            ? `MoreWaita patch removed from ${n} variant(s).`
+                            : 'No variants had the patch applied.');
+                })
+                .catch(err => {
+                    this._setInstallStatus(`Unpatch failed: ${err.message ?? err}`);
+                });
+            return;
+        }
+
+        let removed = 0;
+        for (const color of ALL_COLORS) {
+            const indexPath = `${base}/Adwaita-${color}/index.theme`;
+            if (!GLib.file_test(indexPath, GLib.FileTest.EXISTS)) continue;
+            try {
+                const [, data] = GLib.file_get_contents(indexPath);
+                let text = new TextDecoder().decode(data);
+                if (!text.includes('MoreWaita')) continue;
+                text = text.replace(/MoreWaita,/g, '');
+                GLib.file_set_contents(indexPath, new TextEncoder().encode(text));
+                removed++;
+            } catch (_) {}
+        }
+
+        this._setInstallStatus(
+            removed > 0
+                ? `MoreWaita patch removed from ${removed} variant(s).`
+                : 'No variants had the patch applied.');
+    }
 
     _startInstall(scope, versionOverride) {
         this._progressRow.visible = true;
@@ -532,8 +679,8 @@ export default class AdwaitaColorsPreferences extends ExtensionPreferences {
         this._setInstallStatus('Fetching latest release info from GitHub…');
 
         const session = new Soup.Session();
-        const msg     = Soup.Message.new('GET', GITHUB_API_URL);
-        msg.request_headers.append('User-Agent', 'adwaita-colors-home-prefs/1');
+        const msg = Soup.Message.new('GET', GITHUB_API_URL);
+        msg.request_headers.append('User-Agent', 'adwaita-colors-home/1');
 
         session.send_and_read_async(msg, GLib.PRIORITY_DEFAULT, null, (sess, result) => {
             let zipUrl, tag;
@@ -542,7 +689,6 @@ export default class AdwaitaColorsPreferences extends ExtensionPreferences {
                 const json  = JSON.parse(new TextDecoder().decode(bytes.get_data()));
                 tag = versionOverride ?? json.tag_name;
 
-                // Prefer a zip asset on the release; fall back to GitHub's source archive
                 const asset = json.assets?.find(a =>
                     a.name.endsWith('.zip') ||
                     a.name.endsWith('.tar.gz') ||
@@ -568,9 +714,7 @@ export default class AdwaitaColorsPreferences extends ExtensionPreferences {
 
         const downloader = this._findDownloader();
         if (!downloader) {
-            this._setInstallStatus(
-                'Error: neither curl nor wget found. ' +
-                'Install one with: sudo dnf install curl');
+            this._setInstallStatus('Error: neither curl nor wget found. Install one with: sudo dnf install curl');
             this._progressRow.visible = false;
             return;
         }
@@ -579,16 +723,11 @@ export default class AdwaitaColorsPreferences extends ExtensionPreferences {
             ? ['curl', '-L', '--fail', '-o', archivePath, url]
             : ['wget', '-q', '-O', archivePath, url];
 
-        // Step 1 — Download
         this._runSubprocess(downloadArgs, 'Downloading…', 0.1, 0.4)
             .then(() => {
                 this._progressBar.set_fraction(0.42);
                 this._setInstallStatus('Extracting archive…');
 
-                // Step 2 — Extract
-                // Use Python 3's zipfile module so we don't need the `unzip` package
-                // (which is not installed by default on Fedora).
-                // For .tar.gz/.tar.xz release assets, fall back to tar.
                 let extractArgs;
                 if (url.endsWith('.tar.gz') || url.endsWith('.tar.xz')) {
                     extractArgs = ['tar', '-xf', archivePath, '-C', tmpDir];
@@ -605,58 +744,37 @@ export default class AdwaitaColorsPreferences extends ExtensionPreferences {
                 this._progressBar.set_fraction(0.67);
                 this._setInstallStatus('Installing theme directories…');
 
-                // Step 3 — Find the extracted root directory dynamically.
-                // GitHub source zips extract to a folder like "Adwaita-colors-2.5/"
-                // or "Adwaita-colors-main/". We discover it by scanning tmpDir for
-                // the first subdirectory that contains Adwaita-* subfolders.
                 const findScript = `
 import os, sys
 tmp = sys.argv[1]
 for entry in os.scandir(tmp):
     if entry.is_dir():
-        children = os.listdir(entry.path)
-        if any(c.startswith('Adwaita-') for c in children):
+        if any(c.startswith('Adwaita-') for c in os.listdir(entry.path)):
             print(entry.path)
-            sys.exit(0)
-# Fallback: themes may be directly in tmp
+            exit(0)
 print(tmp)
 `;
-                return this._runSubprocessWithOutput(
-                    ['python3', '-c', findScript, tmpDir]
-                );
+                return this._runSubprocessWithOutput(['python3', '-c', findScript, tmpDir]);
             })
             .then(extractedBase => {
                 extractedBase = extractedBase.trim();
 
-                // Combine mkdir + copy + cache into ONE script so pkexec only
-                // prompts for the password a single time.
                 const installScript = `
 import os, shutil, subprocess, sys
-src_base = sys.argv[1]
-dst_base = sys.argv[2]
-
-# 1. Create destination directory
-os.makedirs(dst_base, exist_ok=True)
-
-# 2. Copy each Adwaita-<color> folder
-for entry in os.scandir(src_base):
+src, dst = sys.argv[1], sys.argv[2]
+os.makedirs(dst, exist_ok=True)
+for entry in os.scandir(src):
     if not (entry.is_dir() and entry.name.startswith('Adwaita-')):
         continue
     if not os.path.exists(os.path.join(entry.path, 'index.theme')):
         continue
-    dst = os.path.join(dst_base, entry.name)
-    if os.path.exists(dst):
-        shutil.rmtree(dst)
-    shutil.copytree(entry.path, dst)
-    print(f'Installed {entry.name}')
-
-# 3. Update icon cache for every installed variant
-for entry in os.scandir(dst_base):
+    d = os.path.join(dst, entry.name)
+    if os.path.exists(d):
+        shutil.rmtree(d)
+    shutil.copytree(entry.path, d)
+for entry in os.scandir(dst):
     if entry.is_dir() and entry.name.startswith('Adwaita-'):
-        subprocess.run(
-            ['gtk-update-icon-cache', '-f', '-t', entry.path],
-            capture_output=True)
-        print(f'Cache updated: {entry.name}')
+        subprocess.run(['gtk-update-icon-cache', '-f', '-t', entry.path], capture_output=True)
 `;
                 const installArgs = this._escalate(
                     ['python3', '-c', installScript, extractedBase, installPath],
@@ -669,11 +787,8 @@ for entry in os.scandir(dst_base):
                 this._progressBar.set_fraction(1.0);
                 this._progressBar.set_text('Done!');
                 this._settings.set_string('installed-version', tag);
-                this._setInstallStatus(`✓ Adwaita Colors ${tag} installed at ${installPath}`);
+                this._setInstallStatus(`Adwaita Colors ${tag} installed at ${installPath}`);
                 this._installation = detectInstallation();
-
-                // Dismiss the not-installed banner
-                if (this._banner) this._banner.revealed = false;
 
                 GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2500, () => {
                     this._progressRow.visible = false;
@@ -684,45 +799,18 @@ for entry in os.scandir(dst_base):
                 GLib.spawn_command_line_async(`rm -rf ${tmpDir}`);
                 this._setInstallStatus(`Installation failed: ${err.message ?? err}`);
                 this._progressRow.visible = false;
-                log(`[AdwaitaColorsHome] Install error: ${err}`);
             });
     }
 
-    /**
-     * Returns true when the target path requires root to write to.
-     */
-    _needsPrivileges(path) {
-        return path.startsWith('/usr/') ||
-               path.startsWith('/var/usrlocal/') ||
-               path.startsWith('/usr/local/');
-    }
-
-    /**
-     * Wrap argv with pkexec when `targetPath` is a system directory.
-     *
-     * pkexec requires the *absolute path* of the binary — it refuses to run
-     * bare command names. We resolve the path with GLib.find_program_in_path.
-     *
-     * Examples:
-     *   ['bash', '-c', '...']   → ['pkexec', '/bin/bash', '-c', '...']
-     *   ['cp', '-r', src, dst]  → ['pkexec', '/usr/bin/cp', '-r', src, dst]
-     */
     _escalate(argv, targetPath) {
-        if (!this._needsPrivileges(targetPath)) return argv;
-
+        if (!needsPrivileges(targetPath))
+            return argv;
         const bin = GLib.find_program_in_path(argv[0]);
-        if (!bin) {
-            log(`[AdwaitaColorsHome] Warning: could not resolve path for ${argv[0]}`);
-            return argv; // let it fail naturally with a clear error
-        }
-
+        if (!bin)
+            return argv;
         return ['pkexec', bin, ...argv.slice(1)];
     }
 
-    /**
-     * Run a subprocess; resolves on exit 0, rejects with a helpful error otherwise.
-     * Uses wait_check_async so non-zero exits are surfaced as real thrown errors.
-     */
     _runSubprocess(argv, label, fromFraction, toFraction) {
         return new Promise((resolve, reject) => {
             let proc;
@@ -737,7 +825,6 @@ for entry in os.scandir(dst_base):
                 return;
             }
 
-            // Animate the progress bar while the process runs
             let frac = fromFraction;
             const step = (toFraction - fromFraction) * 0.08;
             const pulseId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 250, () => {
@@ -760,9 +847,6 @@ for entry in os.scandir(dst_base):
         });
     }
 
-    /**
-     * Run a subprocess and return a Promise<string> of its stdout.
-     */
     _runSubprocessWithOutput(argv) {
         return new Promise((resolve, reject) => {
             let proc;
@@ -780,11 +864,10 @@ for entry in os.scandir(dst_base):
             proc.communicate_utf8_async(null, null, (_proc, result) => {
                 try {
                     const [, stdout] = proc.communicate_utf8_finish(result);
-                    if (!proc.get_if_exited() || proc.get_exit_status() !== 0) {
+                    if (!proc.get_if_exited() || proc.get_exit_status() !== 0)
                         reject(new Error(`${argv[0]} failed`));
-                    } else {
+                    else
                         resolve(stdout ?? '');
-                    }
                 } catch (e) {
                     reject(e);
                 }
@@ -792,7 +875,6 @@ for entry in os.scandir(dst_base):
         });
     }
 
-    /** Find 'curl' or 'wget' on PATH. Returns the command name or null. */
     _findDownloader() {
         for (const tool of ['curl', 'wget']) {
             if (GLib.find_program_in_path(tool)) return tool;
@@ -803,8 +885,6 @@ for entry in os.scandir(dst_base):
     _setInstallStatus(msg) {
         if (this._installStatusRow) this._installStatusRow.subtitle = msg;
     }
-
-    // ── Uninstall ─────────────────────────────────────────────────────────────
 
     _confirmUninstall() {
         const dialog = new Adw.MessageDialog({
@@ -827,15 +907,11 @@ for entry in os.scandir(dst_base):
 
         this._progressRow.visible = true;
 
-        // Use Python so we can escalate a single binary (pkexec needs abs path,
-        // and bash globs don't work cleanly with pkexec).
         const rmScript = `
 import os, shutil, sys
-base = sys.argv[1]
-for entry in os.scandir(base):
+for entry in os.scandir(sys.argv[1]):
     if entry.is_dir() and entry.name.startswith('Adwaita-'):
         shutil.rmtree(entry.path)
-        print(f'Removed {entry.name}')
 `;
         const args = this._escalate(['python3', '-c', rmScript, base], base);
         this._runSubprocess(args, 'Removing…', 0, 1)
@@ -843,12 +919,9 @@ for entry in os.scandir(base):
                 this._settings.set_string('installed-version', '');
                 this._installation = detectInstallation();
 
-                // Reset the icon theme to the default Adwaita so the user
-                // isn't left with a broken/missing theme reference.
                 const currentTheme = this._desktopSettings.get_string('icon-theme');
-                if (currentTheme.startsWith('Adwaita-')) {
+                if (currentTheme.startsWith('Adwaita-'))
                     this._desktopSettings.set_string('icon-theme', 'Adwaita');
-                }
 
                 this._setInstallStatus('Adwaita Colors removed. Icon theme reset to Adwaita.');
                 this._progressRow.visible = false;
@@ -859,60 +932,21 @@ for entry in os.scandir(base):
             });
     }
 
-    // ── MoreWaita Patch ───────────────────────────────────────────────────────
-
-    _applyMoreWaitaPatch() {
-        const base = this._installation.path;
-        if (!base) {
-            this._setInstallStatus('Cannot patch: Adwaita Colors is not installed.');
-            return;
-        }
-
-        let patched = 0;
-        for (const color of ALL_COLORS) {
-            const indexPath = `${base}/Adwaita-${color}/index.theme`;
-            if (!GLib.file_test(indexPath, GLib.FileTest.EXISTS)) continue;
-
-            try {
-                const [, data] = GLib.file_get_contents(indexPath);
-                let text = new TextDecoder().decode(data);
-                if (text.includes('MoreWaita')) continue;
-
-                text = text.replace(/^Inherits=(.*)$/m, 'Inherits=MoreWaita,$1');
-                GLib.file_set_contents(indexPath, new TextEncoder().encode(text));
-                patched++;
-            } catch (e) {
-                log(`[AdwaitaColorsHome] MoreWaita patch failed for Adwaita-${color}: ${e}`);
-            }
-        }
-
-        this._setInstallStatus(
-            patched > 0
-                ? `MoreWaita patch applied to ${patched} variant(s).`
-                : 'All variants were already patched.');
-    }
-
-    // ─────────────────────────────────────────────────────────────────────────
-    // PAGE 3 — About
-    // ─────────────────────────────────────────────────────────────────────────
-
     _buildAboutPage() {
         const page = new Adw.PreferencesPage({
             title: 'About',
             icon_name: 'help-about-symbolic',
         });
 
-        // ── Extension info ─────────────────────────────────────────────────
         const infoGroup = new Adw.PreferencesGroup({ title: 'Adwaita Colors Home' });
-
         infoGroup.add(new Adw.ActionRow({ title: 'Extension Version', subtitle: '1.0' }));
-        infoGroup.add(new Adw.ActionRow({ title: 'GNOME Shell Compatibility', subtitle: '47, 48' }));
+        infoGroup.add(new Adw.ActionRow({ title: 'GNOME Shell Compatibility', subtitle: '47, 48, 49, 50' }));
 
         const accentRow = new Adw.ActionRow({
             title: 'Accent Color Support',
             subtitle: this._hasAccentColor
                 ? 'Available (GNOME 47+)'
-                : 'Unavailable — upgrade to GNOME 47 or newer',
+                : 'Unavailable, upgrade to GNOME 47 or newer',
         });
         accentRow.add_prefix(new Gtk.Image({
             icon_name: this._hasAccentColor ? 'emblem-ok-symbolic' : 'dialog-warning-symbolic',
@@ -921,12 +955,12 @@ for entry in os.scandir(base):
         infoGroup.add(accentRow);
         page.add(infoGroup);
 
-        // ── Links ──────────────────────────────────────────────────────────
         const linksGroup = new Adw.PreferencesGroup({ title: 'Links' });
         for (const { title, url } of [
-            { title: 'Adwaita Colors on GitHub', url: GITHUB_PAGE_URL },
-            { title: 'Report an Issue',          url: GITHUB_ISSUES_URL },
-            { title: 'Latest Release',           url: GITHUB_RELEASES_URL },
+            { title: 'Adwaita Colors on GitHub',         url: GITHUB_PAGE_URL },
+            { title: 'Report an issue, icon theme',     url: GITHUB_ISSUES_URL },
+            { title: 'Report an issue, this extension', url: GITHUB_HOME_ISSUES_URL },
+            { title: 'Latest Release',                   url: GITHUB_RELEASES_URL },
         ]) {
             const row = new Adw.ActionRow({ title, activatable: true });
             row.add_suffix(new Gtk.Image({ icon_name: 'adw-external-link-symbolic' }));
@@ -935,7 +969,6 @@ for entry in os.scandir(base):
         }
         page.add(linksGroup);
 
-        // ── Manual update check ────────────────────────────────────────────
         const updateGroup = new Adw.PreferencesGroup({ title: 'Updates' });
         this._manualCheckLabel = new Gtk.Label({ label: '', valign: Gtk.Align.CENTER });
         const checkBtn = new Gtk.Button({ label: 'Check Now', valign: Gtk.Align.CENTER });
@@ -946,11 +979,10 @@ for entry in os.scandir(base):
         updateGroup.add(checkRow);
         page.add(updateGroup);
 
-        // ── Credits ────────────────────────────────────────────────────────
         const creditsGroup = new Adw.PreferencesGroup({ title: 'Credits' });
         for (const [title, subtitle] of [
             ['Icon Theme', 'Adwaita Colors by dpejoh'],
-            ['Extension',  'Adwaita Colors Home — official companion extension'],
+            ['Extension',  'Adwaita Colors Home, official companion extension'],
             ['License',    'GPL-3.0-or-later'],
         ]) {
             creditsGroup.add(new Adw.ActionRow({ title, subtitle }));
@@ -963,8 +995,8 @@ for entry in os.scandir(base):
     _manualUpdateCheck() {
         this._manualCheckLabel.label = 'Checking…';
         const session = new Soup.Session();
-        const msg     = Soup.Message.new('GET', GITHUB_API_URL);
-        msg.request_headers.append('User-Agent', 'adwaita-colors-home-prefs/1');
+        const msg = Soup.Message.new('GET', GITHUB_API_URL);
+        msg.request_headers.append('User-Agent', 'adwaita-colors-home/1');
 
         session.send_and_read_async(msg, GLib.PRIORITY_DEFAULT, null, (sess, result) => {
             try {
@@ -973,16 +1005,14 @@ for entry in os.scandir(base):
                 const latest    = json.tag_name;
                 const installed = this._settings.get_string('installed-version');
 
-                if (!installed) {
+                if (!installed)
                     this._manualCheckLabel.label = `Latest: ${latest}`;
-                } else if (isNewer(latest, installed)) {
+                else if (isNewer(latest, installed))
                     this._manualCheckLabel.label = `Update available: ${latest}`;
-                } else {
-                    this._manualCheckLabel.label = `Up to date (${installed})`;
-                }
+                else
+                    this._manualCheckLabel.label = 'Up to date';
 
-                this._settings.set_int64(
-                    'last-update-check', Math.floor(Date.now() / 1000));
+                this._settings.set_int64('last-update-check', Math.floor(Date.now() / 1000));
             } catch (_) {
                 this._manualCheckLabel.label = 'Network error';
             }
