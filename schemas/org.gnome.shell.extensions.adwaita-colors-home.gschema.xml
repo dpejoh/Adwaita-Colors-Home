@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.adwaita-colors-home"
+          path="/org/gnome/shell/extensions/adwaita-colors-home/">
+
+    <key name="auto-sync" type="b">
+      <default>true</default>
+      <summary>Auto-sync icon theme with accent color</summary>
+      <description>When enabled, automatically changes the icon theme to match the GNOME accent color.</description>
+    </key>
+
+    <key name="manual-color" type="s">
+      <default>'blue'</default>
+      <summary>Manually selected color when auto-sync is off</summary>
+      <description>The Adwaita Colors variant to use when auto-sync is disabled.</description>
+    </key>
+
+    <key name="install-scope" type="s">
+      <default>'user'</default>
+      <summary>Installation scope: user or system</summary>
+      <description>Whether to install themes for the current user only or system-wide.</description>
+    </key>
+
+    <key name="installed-version" type="s">
+      <default>''</default>
+      <summary>Installed Adwaita Colors version tag</summary>
+      <description>The version tag of the currently installed Adwaita Colors theme (e.g. v2.4.0).</description>
+    </key>
+
+    <key name="last-update-check" type="x">
+      <default>0</default>
+      <summary>Timestamp of last update check (Unix seconds)</summary>
+      <description>Unix timestamp of when the extension last checked GitHub for a new release.</description>
+    </key>
+
+    <key name="skipped-version" type="s">
+      <default>''</default>
+      <summary>Version tag the user chose to skip</summary>
+      <description>If set, update notifications for this version will be suppressed.</description>
+    </key>
+
+    <key name="show-panel-indicator" type="b">
+      <default>false</default>
+      <summary>Show panel color indicator</summary>
+      <description>Display a colored circle in the top panel for quick color switching.</description>
+    </key>
+
+    <key name="custom-install-path" type="s">
+      <default>''</default>
+      <summary>Custom icon install path (empty = auto-detect)</summary>
+      <description>Override the default installation directory. Leave empty for automatic detection.</description>
+    </key>
+
+  </schema>
+</schemalist>

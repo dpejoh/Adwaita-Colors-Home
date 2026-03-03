@@ -1,0 +1,25 @@
+/*
+ * Adwaita Colors Home — stylesheet.css
+ */
+
+/* ── Panel Indicator ────────────────────────────────────────────────────── */
+
+/* Ensure the panel button itself centers its content vertically */
+#adwaita-colors-home {
+    -natural-hpadding: 8px;
+}
+
+/* Color swatch buttons in the panel popover */
+.adwaita-colors-popup {
+    padding: 6px;
+}
+
+.adwaita-colors-popup StButton {
+    border-radius: 50%;
+    transition-duration: 150ms;
+}
+
+.adwaita-colors-popup StButton:focus {
+    outline: 2px solid rgba(255,255,255,0.7);
+    outline-offset: 2px;
+}
