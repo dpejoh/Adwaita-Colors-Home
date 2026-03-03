@@ -30,6 +30,7 @@ const COLOR_META = {
 
 const ACCENT_TO_THEME = {
     blue:    'Adwaita-blue',
+    brown:   'Adwaita-brown',
     teal:    'Adwaita-teal',
     green:   'Adwaita-green',
     yellow:  'Adwaita-yellow',

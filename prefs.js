@@ -26,7 +26,7 @@ const COLOR_META = {
 };
 
 const ACCENT_TO_COLOR = {
-    blue: 'blue', teal: 'teal', green: 'green', yellow: 'yellow',
+    blue: 'blue', brown: 'brown', teal: 'teal', green: 'green', yellow: 'yellow',
     orange: 'orange', red: 'red', pink: 'pink', purple: 'purple',
     slate: 'slate', default: 'blue',
 };
