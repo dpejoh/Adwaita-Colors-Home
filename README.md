@@ -17,6 +17,14 @@ Adwaita Colors provides per-accent-color icon theme variants (`Adwaita-blue`, `A
 | **Panel indicator** | Optional colored circle in the top bar with a one-click color switcher |
 | **MoreWaita integration** | Auto-patch `index.theme` to add MoreWaita to the inheritance chain |
 
+## Screenshots
+
+<p align="center">
+	<img src="Screenshots/01.png" alt="Screenshot 1" width="32%" />
+	<img src="Screenshots/02.png" alt="Screenshot 2" width="32%" />
+	<img src="Screenshots/03.png" alt="Screenshot 3" width="32%" />
+</p>
+
 ---
 
 ## Compatibility
