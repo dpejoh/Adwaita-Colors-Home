@@ -35,7 +35,7 @@ const ICON_PATHS = [
     GLib.get_home_dir() + '/.local/share/icons',
     GLib.get_home_dir() + '/.icons',
     '/usr/local/share/icons',
-    '/var/usrlocal/share/icons',
+    '/var/usr/local/share/icons',
     '/usr/share/icons',
 ];
 
@@ -43,7 +43,7 @@ const MOREWAITA_PATHS = [
     GLib.get_home_dir() + '/.local/share/icons/MoreWaita',
     GLib.get_home_dir() + '/.icons/MoreWaita',
     '/usr/local/share/icons/MoreWaita',
-    '/var/usrlocal/share/icons/MoreWaita',
+    '/var/usr/local/share/icons/MoreWaita',
     '/usr/share/icons/MoreWaita',
 ];
 

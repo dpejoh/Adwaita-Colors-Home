@@ -45,7 +45,7 @@ const ICON_PATHS = [
     GLib.get_home_dir() + '/.local/share/icons',
     GLib.get_home_dir() + '/.icons',
     '/usr/local/share/icons',
-    '/var/usrlocal/share/icons',
+    '/var/usr/local/share/icons',
     '/usr/share/icons',
 ];
 
