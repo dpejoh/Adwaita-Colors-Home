@@ -3,6 +3,6 @@
     "name": "Adwaita Colors Home",
     "description": "Syncs your icon theme with your GNOME accent color. Manages installation and updates for the Adwaita Colors icon theme.",
     "shell-version": ["47", "48", "49", "50"],
-    "url": "https://github.com/dpejoh/Adwaita-colors",
+    "url": "https://github.com/dpejoh/Adwaita-Colors-Home",
     "settings-schema": "org.gnome.shell.extensions.adwaita-colors-home"
 }
