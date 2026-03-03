@@ -163,6 +163,9 @@ export default class AdwaitaColorsHome extends Extension {
                     this._destroyIndicator();
             });
 
+        // Save the icon theme so it can be restored when the extension is disabled
+        this._originalIconTheme = this._desktopSettings.get_string('icon-theme');
+
         // Check if any themes are installed before syncing
         const anyInstalled = ALL_COLORS.some(color =>
             this._isThemeInstalled(`Adwaita-${color}`)
@@ -203,6 +206,11 @@ export default class AdwaitaColorsHome extends Extension {
             this._soupSession.abort();
             this._soupSession = null;
         }
+
+        // Restore the icon theme that was active before the extension was enabled.
+        if (this._originalIconTheme !== null && this._originalIconTheme !== undefined)
+            this._desktopSettings.set_string('icon-theme', this._originalIconTheme);
+        this._originalIconTheme = null;
 
         this._settings = null;
         this._desktopSettings = null;
