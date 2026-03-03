@@ -183,6 +183,11 @@ export default class AdwaitaColorsHome extends Extension {
 
         this._destroyIndicator();
 
+        if (this._updateCancellable) {
+            this._updateCancellable.cancel();
+            this._updateCancellable = null;
+        }
+
         if (this._soupSession) {
             this._soupSession.abort();
             this._soupSession = null;
@@ -256,24 +261,31 @@ export default class AdwaitaColorsHome extends Extension {
         if (now - lastCheck < UPDATE_CHECK_INTERVAL)
             return;
 
+        this._updateCancellable = new Gio.Cancellable();
         this._soupSession = new Soup.Session();
         const msg = Soup.Message.new('GET', GITHUB_API_URL);
         msg.request_headers.append('User-Agent', 'adwaita-colors-home/1');
 
-        this._soupSession.send_and_read_async(msg, GLib.PRIORITY_LOW, null, (session, result) => {
+        this._soupSession.send_and_read_async(msg, GLib.PRIORITY_LOW, this._updateCancellable, (session, result) => {
             try {
                 const bytes = session.send_and_read_finish(result);
                 const json = JSON.parse(new TextDecoder().decode(bytes.get_data()));
-                this._settings.set_int64('last-update-check', Math.floor(Date.now() / 1000));
+                
+                if (this._settings) {
+                    this._settings.set_int64('last-update-check', Math.floor(Date.now() / 1000));
 
-                const installed = this._settings.get_string('installed-version');
-                const skipped = this._settings.get_string('skipped-version');
-                if (installed && json.tag_name && skipped !== json.tag_name &&
-                    this._isNewerVersion(json.tag_name, installed)) {
-                    // update available, surfaced in prefs status row
+                    const installed = this._settings.get_string('installed-version');
+                    const skipped = this._settings.get_string('skipped-version');
+                    if (installed && json.tag_name && skipped !== json.tag_name &&
+                        this._isNewerVersion(json.tag_name, installed)) {
+                        // update available, surfaced in prefs status row
+                    }
                 }
             } catch (_) {}
-            this._soupSession = null;
+            
+            if (this._soupSession) {
+                this._soupSession = null;
+            }
         });
     }
 
