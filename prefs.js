@@ -26,7 +26,7 @@ const COLOR_META = {
 };
 
 const ACCENT_TO_COLOR = {
-    blue: 'blue', teal: 'teal', green: 'green', yellow: 'yellow',
+    blue: 'blue', brown: 'brown', teal: 'teal', green: 'green', yellow: 'yellow',
     orange: 'orange', red: 'red', pink: 'pink', purple: 'purple',
     slate: 'slate', default: 'blue',
 };
@@ -35,7 +35,7 @@ const ICON_PATHS = [
     GLib.get_home_dir() + '/.local/share/icons',
     GLib.get_home_dir() + '/.icons',
     '/usr/local/share/icons',
-    '/var/usrlocal/share/icons',
+    '/var/usr/local/share/icons',
     '/usr/share/icons',
 ];
 
@@ -43,7 +43,7 @@ const MOREWAITA_PATHS = [
     GLib.get_home_dir() + '/.local/share/icons/MoreWaita',
     GLib.get_home_dir() + '/.icons/MoreWaita',
     '/usr/local/share/icons/MoreWaita',
-    '/var/usrlocal/share/icons/MoreWaita',
+    '/var/usr/local/share/icons/MoreWaita',
     '/usr/share/icons/MoreWaita',
 ];
 
@@ -94,7 +94,7 @@ function detectDistroType() {
 function resolveInstallPath(scope, distroType) {
     if (scope === 'user')
         return GLib.get_home_dir() + '/.local/share/icons';
-    return distroType === 'atomic' ? '/var/usrlocal/share/icons' : '/usr/share/icons';
+    return distroType === 'atomic' ? '/var/usr/local/share/icons' : '/usr/share/icons';
 }
 
 function parseSemver(v) {
@@ -132,7 +132,7 @@ function makeColorDot(hex, size = 16) {
 
 function needsPrivileges(path) {
     return path.startsWith('/usr/') ||
-           path.startsWith('/var/usrlocal/') ||
+           path.startsWith('/var/usr/local/') ||
            path.startsWith('/usr/local/');
 }
 
@@ -361,7 +361,7 @@ export default class AdwaitaColorsPreferences extends ExtensionPreferences {
         const locationGroup = new Adw.PreferencesGroup({
             title: 'Install Location',
             description: isAtomic
-                ? 'Running on an atomic/ostree desktop. System installs use /var/usrlocal/share/icons (persists across OS updates). User installs are recommended.'
+                ? 'Running on an atomic/ostree desktop. System installs use /var/usr/local/share/icons (persists across OS updates). User installs are recommended.'
                 : 'System installs require an administrator password (pkexec). User installs are always available without extra permissions.',
         });
 
@@ -378,7 +378,7 @@ export default class AdwaitaColorsPreferences extends ExtensionPreferences {
         const scopeModel = new Gtk.StringList();
         scopeModel.append('User  (~/.local/share/icons)');
         scopeModel.append(isAtomic
-            ? 'System  (/var/usrlocal/share/icons)'
+            ? 'System  (/var/usr/local/share/icons)'
             : 'System  (/usr/share/icons, needs sudo)');
         scopeRow.model = scopeModel;
         scopeRow.selected = this._settings.get_string('install-scope') === 'system' ? 1 : 0;

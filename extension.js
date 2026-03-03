@@ -30,6 +30,7 @@ const COLOR_META = {
 
 const ACCENT_TO_THEME = {
     blue:    'Adwaita-blue',
+    brown:   'Adwaita-brown',
     teal:    'Adwaita-teal',
     green:   'Adwaita-green',
     yellow:  'Adwaita-yellow',
@@ -45,7 +46,7 @@ const ICON_PATHS = [
     GLib.get_home_dir() + '/.local/share/icons',
     GLib.get_home_dir() + '/.icons',
     '/usr/local/share/icons',
-    '/var/usrlocal/share/icons',
+    '/var/usr/local/share/icons',
     '/usr/share/icons',
 ];
 
@@ -162,10 +163,23 @@ export default class AdwaitaColorsHome extends Extension {
                     this._destroyIndicator();
             });
 
-        this._syncIconTheme();
+        // Save the icon theme so it can be restored when the extension is disabled
+        this._originalIconTheme = this._desktopSettings.get_string('icon-theme');
 
-        if (this._settings.get_boolean('show-panel-indicator'))
-            this._createIndicator();
+        // Check if any themes are installed before syncing
+        const anyInstalled = ALL_COLORS.some(color =>
+            this._isThemeInstalled(`Adwaita-${color}`)
+        );
+
+        if (!anyInstalled) {
+            Main.notify('Adwaita Colors Home',
+                'No Adwaita Colors themes detected. Please install them from Settings.');
+        } else {
+            this._syncIconTheme();
+
+            if (this._settings.get_boolean('show-panel-indicator'))
+                this._createIndicator();
+        }
 
         this._checkConflicts();
         this._maybeCheckForUpdates();
@@ -183,10 +197,29 @@ export default class AdwaitaColorsHome extends Extension {
 
         this._destroyIndicator();
 
+        if (this._updateCancellable) {
+            this._updateCancellable.cancel();
+            this._updateCancellable = null;
+        }
+
         if (this._soupSession) {
             this._soupSession.abort();
             this._soupSession = null;
         }
+
+        // Restore the icon theme only if the current theme is one this extension applied.
+        if (this._originalIconTheme !== null && this._originalIconTheme !== undefined) {
+            const currentIconTheme = this._desktopSettings.get_string('icon-theme');
+            let shouldRestore = false;
+            if (typeof currentIconTheme === 'string' && currentIconTheme.startsWith('Adwaita-')) {
+                const colorSuffix = currentIconTheme.substring('Adwaita-'.length);
+                if (ALL_COLORS.includes(colorSuffix))
+                    shouldRestore = true;
+            }
+            if (shouldRestore)
+                this._desktopSettings.set_string('icon-theme', this._originalIconTheme);
+        }
+        this._originalIconTheme = null;
 
         this._settings = null;
         this._desktopSettings = null;
@@ -218,18 +251,22 @@ export default class AdwaitaColorsHome extends Extension {
     }
 
     _applyTheme(themeName) {
-        if (!this._isThemeInstalled(themeName))
-            return;
+        if (!this._isThemeInstalled(themeName)) {
+            log(`[Adwaita Colors Home] Theme not installed: ${themeName}`);
+            return false;
+        }
 
         const current = this._desktopSettings.get_string('icon-theme');
 
         if (!current.startsWith('Adwaita') && this._settings.get_boolean('auto-sync'))
-            return;
+            return false;
 
         if (current !== themeName) {
             this._desktopSettings.set_string('icon-theme', themeName);
             this._indicator?.refresh();
         }
+        
+        return true;
     }
 
     _isThemeInstalled(themeName) {
@@ -256,24 +293,35 @@ export default class AdwaitaColorsHome extends Extension {
         if (now - lastCheck < UPDATE_CHECK_INTERVAL)
             return;
 
+        if (this._updateCancellable) {
+            this._updateCancellable.cancel();
+            this._updateCancellable = null;
+        }
+        this._updateCancellable = new Gio.Cancellable();
         this._soupSession = new Soup.Session();
         const msg = Soup.Message.new('GET', GITHUB_API_URL);
         msg.request_headers.append('User-Agent', 'adwaita-colors-home/1');
 
-        this._soupSession.send_and_read_async(msg, GLib.PRIORITY_LOW, null, (session, result) => {
+        this._soupSession.send_and_read_async(msg, GLib.PRIORITY_LOW, this._updateCancellable, (session, result) => {
             try {
                 const bytes = session.send_and_read_finish(result);
                 const json = JSON.parse(new TextDecoder().decode(bytes.get_data()));
-                this._settings.set_int64('last-update-check', Math.floor(Date.now() / 1000));
+                
+                if (this._settings) {
+                    this._settings.set_int64('last-update-check', Math.floor(Date.now() / 1000));
 
-                const installed = this._settings.get_string('installed-version');
-                const skipped = this._settings.get_string('skipped-version');
-                if (installed && json.tag_name && skipped !== json.tag_name &&
-                    this._isNewerVersion(json.tag_name, installed)) {
-                    // update available, surfaced in prefs status row
+                    const installed = this._settings.get_string('installed-version');
+                    const skipped = this._settings.get_string('skipped-version');
+                    if (installed && json.tag_name && skipped !== json.tag_name &&
+                        this._isNewerVersion(json.tag_name, installed)) {
+                        // update available, surfaced in prefs status row
+                    }
                 }
             } catch (_) {}
-            this._soupSession = null;
+            
+            if (this._soupSession)
+                this._soupSession = null;
+            this._updateCancellable = null;
         });
     }
 
