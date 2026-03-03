@@ -163,6 +163,16 @@ export default class AdwaitaColorsHome extends Extension {
                     this._destroyIndicator();
             });
 
+        // Check if any themes are installed before syncing
+        const anyInstalled = ALL_COLORS.some(color =>
+            this._isThemeInstalled(`Adwaita-${color}`)
+        );
+
+        if (!anyInstalled) {
+            Main.notify('Adwaita Colors Home',
+                'No Adwaita Colors themes detected. Please install them from Settings.');
+        }
+
         this._syncIconTheme();
 
         if (this._settings.get_boolean('show-panel-indicator'))
@@ -224,18 +234,22 @@ export default class AdwaitaColorsHome extends Extension {
     }
 
     _applyTheme(themeName) {
-        if (!this._isThemeInstalled(themeName))
-            return;
+        if (!this._isThemeInstalled(themeName)) {
+            log(`[Adwaita Colors Home] Theme not installed: ${themeName}`);
+            return false;
+        }
 
         const current = this._desktopSettings.get_string('icon-theme');
 
         if (!current.startsWith('Adwaita') && this._settings.get_boolean('auto-sync'))
-            return;
+            return false;
 
         if (current !== themeName) {
             this._desktopSettings.set_string('icon-theme', themeName);
             this._indicator?.refresh();
         }
+        
+        return true;
     }
 
     _isThemeInstalled(themeName) {
