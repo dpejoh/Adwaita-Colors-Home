@@ -174,12 +174,12 @@ export default class AdwaitaColorsHome extends Extension {
         if (!anyInstalled) {
             Main.notify('Adwaita Colors Home',
                 'No Adwaita Colors themes detected. Please install them from Settings.');
+        } else {
+            this._syncIconTheme();
+
+            if (this._settings.get_boolean('show-panel-indicator'))
+                this._createIndicator();
         }
-
-        this._syncIconTheme();
-
-        if (this._settings.get_boolean('show-panel-indicator'))
-            this._createIndicator();
 
         this._checkConflicts();
         this._maybeCheckForUpdates();
@@ -207,9 +207,18 @@ export default class AdwaitaColorsHome extends Extension {
             this._soupSession = null;
         }
 
-        // Restore the icon theme that was active before the extension was enabled.
-        if (this._originalIconTheme !== null && this._originalIconTheme !== undefined)
-            this._desktopSettings.set_string('icon-theme', this._originalIconTheme);
+        // Restore the icon theme only if the current theme is one this extension applied.
+        if (this._originalIconTheme !== null && this._originalIconTheme !== undefined) {
+            const currentIconTheme = this._desktopSettings.get_string('icon-theme');
+            let shouldRestore = false;
+            if (typeof currentIconTheme === 'string' && currentIconTheme.startsWith('Adwaita-')) {
+                const colorSuffix = currentIconTheme.substring('Adwaita-'.length);
+                if (ALL_COLORS.includes(colorSuffix))
+                    shouldRestore = true;
+            }
+            if (shouldRestore)
+                this._desktopSettings.set_string('icon-theme', this._originalIconTheme);
+        }
         this._originalIconTheme = null;
 
         this._settings = null;
@@ -284,6 +293,10 @@ export default class AdwaitaColorsHome extends Extension {
         if (now - lastCheck < UPDATE_CHECK_INTERVAL)
             return;
 
+        if (this._updateCancellable) {
+            this._updateCancellable.cancel();
+            this._updateCancellable = null;
+        }
         this._updateCancellable = new Gio.Cancellable();
         this._soupSession = new Soup.Session();
         const msg = Soup.Message.new('GET', GITHUB_API_URL);
@@ -306,9 +319,9 @@ export default class AdwaitaColorsHome extends Extension {
                 }
             } catch (_) {}
             
-            if (this._soupSession) {
+            if (this._soupSession)
                 this._soupSession = null;
-            }
+            this._updateCancellable = null;
         });
     }
 
