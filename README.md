@@ -2,8 +2,12 @@
 
 Official companion GNOME Shell extension for the [Adwaita Colors](https://github.com/dpejoh/Adwaita-colors) icon theme. Watches your GNOME accent color setting and switches the active icon theme variant (`Adwaita-blue`, `Adwaita-teal`, etc.) to match.
 
-[![Screenshot 1](https://raw.githubusercontent.com/dpejoh/Adwaita-Colors-Home/main/Screenshots/01.png)](https://github.com/dpejoh/Adwaita-Colors-Home/blob/main/Screenshots/01.png)
-[![Screenshot 2](https://raw.githubusercontent.com/dpejoh/Adwaita-Colors-Home/main/Screenshots/02.png)](https://github.com/dpejoh/Adwaita-Colors-Home/blob/main/Screenshots/02.png)
+<table>
+	<tr>
+		<td><a href="https://github.com/dpejoh/Adwaita-Colors-Home/blob/main/Screenshots/01.png"><img src="https://raw.githubusercontent.com/dpejoh/Adwaita-Colors-Home/main/Screenshots/01.png" alt="Screenshot 1"/></a></td>
+		<td><a href="https://github.com/dpejoh/Adwaita-Colors-Home/blob/main/Screenshots/02.png"><img src="https://raw.githubusercontent.com/dpejoh/Adwaita-Colors-Home/main/Screenshots/02.png" alt="Screenshot 2"/></a></td>
+	</tr>
+</table>
 
 ---
 
