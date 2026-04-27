@@ -154,6 +154,25 @@ export default class AdwaitaColorsPreferences extends ExtensionPreferences {
         window.add(this._buildGeneralPage());
         window.add(this._installPage);
         window.add(this._buildAboutPage());
+
+        window.connect('close-request', () => {
+            this._settings        = null;
+            this._desktopSettings = null;
+            this._window          = null;
+            this._distroType      = null;
+            this._installation    = null;
+            this._morewaita       = null;
+            this._hasAccentColor  = null;
+            this._installPage     = null;
+            this._activeColorDot  = null;
+            this._activeColorLabel = null;
+            this._updateStatusRow  = null;
+            this._progressRow      = null;
+            this._progressBar      = null;
+            this._installStatusRow = null;
+            this._manualCheckLabel = null;
+            this._mwStatusRow      = null;
+        });
     }
 
     _buildGeneralPage() {
