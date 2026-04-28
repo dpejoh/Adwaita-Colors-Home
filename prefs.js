@@ -481,45 +481,45 @@ export default class AdwaitaColorsPreferences extends ExtensionPreferences {
                 : 'MoreWaita extends Adwaita with many additional icons. Download and install it here.',
         });
 
-        const statusRow = new Adw.ActionRow({ title: 'MoreWaita Status' });
-        this._mwStatusIcon = new Gtk.Image({
-            icon_name: mw.found ? 'emblem-ok-symbolic' : 'dialog-information-symbolic',
-        });
-        if (mw.found) this._mwStatusIcon.css_classes = ['success'];
-        statusRow.add_prefix(this._mwStatusIcon);
-        this._mwStatusLabel = new Gtk.Label({
-            label: mw.found ? `Installed at ${mw.path}` : 'Not installed',
-            hexpand: true,
-            xalign: 0,
-        });
-        statusRow.add_suffix(this._mwStatusLabel);
-
-        if (!this._mwInstallBtn)
+        this._mwStatusRow = new Adw.ActionRow({ title: 'MoreWaita Status' });
+        if (mw.found) {
+            this._mwStatusRow.subtitle = `Installed at ${mw.path}`;
+            const icon = new Gtk.Image({ icon_name: 'emblem-ok-symbolic' });
+            icon.css_classes = ['success'];
+            this._mwStatusRow.add_prefix(icon);
+        } else {
+            this._mwStatusRow.subtitle = 'Not installed';
+            this._mwStatusRow.add_prefix(
+                new Gtk.Image({ icon_name: 'dialog-information-symbolic' }));
             this._mwInstallBtn = new Gtk.Button({
                 label: 'Install MoreWaita',
                 css_classes: ['suggested-action'],
                 valign: Gtk.Align.CENTER,
             });
-        this._mwInstallBtn.connect('clicked', () => this._installMoreWaita());
-        statusRow.add_suffix(this._mwInstallBtn);
-        group.add(statusRow);
+            this._mwInstallBtn.connect('clicked', () => this._installMoreWaita());
+            this._mwStatusRow.add_suffix(this._mwInstallBtn);
+        }
+        group.add(this._mwStatusRow);
 
         if (mw.found) {
+            const patchStatus = this._getMoreWaitaPatchStatus();
             this._mwStatusRow = new Adw.ActionRow({
                 title: 'Integration Status',
-                subtitle: this._getMoreWaitaPatchStatus(),
+                subtitle: patchStatus,
             });
             group.add(this._mwStatusRow);
 
-            const integrateBtn = new Gtk.Button({
+            const isPatched = patchStatus.startsWith('Patched, all');
+            this._mwIntegrateBtn = new Gtk.Button({
                 label: 'Integrate Now',
                 css_classes: ['suggested-action'],
                 valign: Gtk.Align.CENTER,
             });
-            integrateBtn.connect('clicked', () => this._integrateMoreWaita());
-            const integrateRow = new Adw.ActionRow({ title: 'Patch Inherits chain & copy icons' });
-            integrateRow.add_suffix(integrateBtn);
-            group.add(integrateRow);
+            this._mwIntegrateBtn.connect('clicked', () => this._integrateMoreWaita());
+            this._mwIntegrateRow = new Adw.ActionRow({ title: 'Patch Inherits chain' });
+            this._mwIntegrateRow.add_suffix(this._mwIntegrateBtn);
+            this._mwIntegrateRow.visible = !isPatched;
+            group.add(this._mwIntegrateRow);
 
             const unpatchBtn = new Gtk.Button({
                 label: 'Remove patch',
@@ -527,12 +527,12 @@ export default class AdwaitaColorsPreferences extends ExtensionPreferences {
             });
             unpatchBtn.connect('clicked', () => {
                 this._removeMoreWaitaPatch();
-                if (this._mwStatusRow)
-                    this._mwStatusRow.subtitle = this._getMoreWaitaPatchStatus();
+                this._refreshMoreWaitaIntegrationUI();
             });
-            const unpatchRow = new Adw.ActionRow({ title: 'Remove MoreWaita from Inherits chain' });
-            unpatchRow.add_suffix(unpatchBtn);
-            group.add(unpatchRow);
+            this._mwUnpatchRow = new Adw.ActionRow({ title: 'Remove MoreWaita from Inherits chain' });
+            this._mwUnpatchRow.add_suffix(unpatchBtn);
+            this._mwUnpatchRow.visible = isPatched;
+            group.add(this._mwUnpatchRow);
         }
 
         return group;
@@ -694,23 +694,28 @@ shutil.copytree(src, dst)
 
     _integrateMoreWaita() {
         this._applyMoreWaitaPatch();
+        this._refreshMoreWaitaIntegrationUI();
+        this._setInstallStatus('MoreWaita integrated — Inherits chain patched.');
+    }
+
+    _refreshMoreWaitaIntegrationUI() {
         if (this._mwStatusRow)
             this._mwStatusRow.subtitle = this._getMoreWaitaPatchStatus();
-        this._setInstallStatus('MoreWaita integrated — Inherits chain patched.');
+
+        const isPatched = this._getMoreWaitaPatchStatus().startsWith('Patched, all');
+        if (this._mwIntegrateRow)
+            this._mwIntegrateRow.visible = !isPatched;
+        if (this._mwUnpatchRow)
+            this._mwUnpatchRow.visible = isPatched;
     }
 
     _refreshMoreWaitaUI() {
         this._morewaita = detectMoreWaita();
-        if (this._mwStatusIcon) {
-            this._mwStatusIcon.icon_name = this._morewaita.found
-                ? 'emblem-ok-symbolic' : 'dialog-information-symbolic';
-            if (this._morewaita.found)
-                this._mwStatusIcon.css_classes = ['success'];
-        }
-        if (this._mwStatusLabel)
-            this._mwStatusLabel.label = this._morewaita.found
+        if (this._mwStatusRow) {
+            this._mwStatusRow.subtitle = this._morewaita.found
                 ? `Installed at ${this._morewaita.path}`
                 : 'Not installed';
+        }
     }
 
     _getMoreWaitaPatchStatus() {
