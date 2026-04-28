@@ -891,31 +891,101 @@ print(removed)
     }
 
     _startInstall(scope, versionOverride) {
-        const localRepo = `${GLib.get_home_dir()}/code/Adwaita-colors`;
-
         this._progressRow.visible = true;
         this._progressBar.set_fraction(0);
-        this._progressBar.set_text('Copying from local repo…');
-        this._setInstallStatus('Copying Adwaita Colors from local repository…');
+        this._progressBar.set_text('Fetching release info…');
+        this._setInstallStatus('Fetching latest release info from GitHub…');
 
+        const session = new Soup.Session();
+        const msg = Soup.Message.new('GET', GITHUB_API_URL);
+        msg.request_headers.append('User-Agent', 'adwaita-colors-home/1');
+
+        session.send_and_read_async(msg, GLib.PRIORITY_DEFAULT, null, (sess, result) => {
+            let zipUrl, tag;
+            try {
+                const bytes = sess.send_and_read_finish(result);
+                const json  = JSON.parse(new TextDecoder().decode(bytes.get_data()));
+                tag = versionOverride ?? json.tag_name;
+
+                const asset = json.assets?.find(a =>
+                    a.name.endsWith('.zip') ||
+                    a.name.endsWith('.tar.gz') ||
+                    a.name.endsWith('.tar.xz'));
+                zipUrl = asset?.browser_download_url
+                    ?? `https://github.com/dpejoh/Adwaita-colors/archive/refs/tags/${tag}.zip`;
+            } catch (e) {
+                this._setInstallStatus(`Error fetching release info: ${e.message}`);
+                this._progressRow.visible = false;
+                return;
+            }
+
+            this._progressBar.set_fraction(0.1);
+            this._setInstallStatus(`Downloading Adwaita Colors ${tag}…`);
+            this._downloadAndInstall(zipUrl, tag, scope);
+        });
+    }
+
+    _downloadAndInstall(url, tag, scope) {
+        const tmpDir      = GLib.Dir.make_tmp('adwaita-colors-XXXXXX');
+        const archivePath = `${tmpDir}/archive.zip`;
         const installPath = scope === 'user'
             ? `${GLib.get_home_dir()}/.local/share/icons`
             : (this._distroType === 'atomic' ? '/var/usr/local/share/icons' : '/usr/share/icons');
         const withFolders = this._settings.get_boolean('install-custom-folders');
-        const tmpDir = GLib.Dir.make_tmp('adwaita-colors-XXXXXX');
 
-        const copyArgs = ['cp', '-r', '--dereference', localRepo, tmpDir];
-        this._runSubprocess(copyArgs, 'Copying…', 0, 0.3)
+        const downloader = this._findDownloader();
+        if (!downloader) {
+            this._setInstallStatus('Error: neither curl nor wget found. Install one with: sudo dnf install curl');
+            this._progressRow.visible = false;
+            return;
+        }
+
+        const downloadArgs = downloader === 'curl'
+            ? ['curl', '-L', '--fail', '-o', archivePath, url]
+            : ['wget', '-q', '-O', archivePath, url];
+
+        this._runSubprocess(downloadArgs, 'Downloading…', 0.1, 0.4)
             .then(() => {
-                this._progressBar.set_fraction(0.35);
-                this._progressBar.set_text('Installing…');
+                this._progressBar.set_fraction(0.42);
+                this._setInstallStatus('Extracting archive…');
 
+                let extractArgs;
+                if (url.endsWith('.tar.gz') || url.endsWith('.tar.xz')) {
+                    extractArgs = ['tar', '-xf', archivePath, '-C', tmpDir];
+                } else {
+                    extractArgs = [
+                        'python3', '-c',
+                        `import zipfile, sys\nwith zipfile.ZipFile(sys.argv[1]) as z:\n    z.extractall(sys.argv[2])`,
+                        archivePath, tmpDir,
+                    ];
+                }
+                return this._runSubprocess(extractArgs, 'Extracting…', 0.42, 0.65);
+            })
+            .then(() => {
+                this._progressBar.set_fraction(0.67);
+                this._setInstallStatus('Installing with setup script…');
+
+                // Find the extracted directory containing the setup script
+                const finderScript = `
+import os, sys
+tmp = sys.argv[1]
+for root, dirs, files in os.walk(tmp):
+    if 'setup' in files:
+        print(root)
+        sys.exit(0)
+print(tmp)
+`;
+                return this._runSubprocessWithOutput(['python3', '-c', finderScript, tmpDir]);
+            })
+            .then(extractedDir => {
+                extractedDir = extractedDir.trim();
                 const bashBin = GLib.find_program_in_path('bash');
-                if (!bashBin)
+                if (!bashBin) {
                     throw new Error('bash not found');
+                }
 
-                const repoDir = `${tmpDir}/Adwaita-colors`;
-                const setupArgs = [bashBin, `${repoDir}/setup`, '-i'];
+                // Build setup command
+                const setupArgs = [bashBin, `${extractedDir}/setup`, '-i'];
                 if (withFolders)
                     setupArgs.push('-f');
                 if (scope === 'system')
@@ -924,14 +994,14 @@ print(removed)
                     setupArgs.push('-u');
 
                 const escalated = this._escalate(setupArgs, installPath);
-                return this._runSubprocess(escalated, 'Installing…', 0.35, 0.95);
+                return this._runSubprocess(escalated, 'Installing…', 0.65, 0.99);
             })
             .then(() => {
                 GLib.spawn_command_line_async(`rm -rf ${tmpDir}`);
                 this._progressBar.set_fraction(1.0);
                 this._progressBar.set_text('Done!');
-                this._settings.set_string('installed-version', 'local');
-                this._setInstallStatus(`Adwaita Colors installed at ${installPath}`);
+                this._settings.set_string('installed-version', tag);
+                this._setInstallStatus(`Adwaita Colors ${tag} installed at ${installPath}`);
                 this._installation = detectInstallation();
 
                 GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2500, () => {
