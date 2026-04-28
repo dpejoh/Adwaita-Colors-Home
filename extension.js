@@ -198,6 +198,11 @@ export default class AdwaitaColorsHome extends Extension {
         this._settings.disconnect(this._showIndicatorChangedId);
         this._settings.disconnect(this._carryOverChangedId);
 
+        if (this._migrateSourceId) {
+            GLib.Source.remove(this._migrateSourceId);
+            this._migrateSourceId = 0;
+        }
+
         this._destroyIndicator();
 
         if (this._updateCancellable) {
@@ -283,64 +288,81 @@ export default class AdwaitaColorsHome extends Extension {
         if (!oldColor || !newColor || oldColor === newColor)
             return;
 
-        const pythonBin = GLib.find_program_in_path('python3');
-        if (!pythonBin) return;
-
-        const script = `
-import os, sys
-import gi
-gi.require_version('Gio', '2.0')
-from gi.repository import Gio
-
-old = sys.argv[1]
-new = sys.argv[2]
-home = os.path.expanduser('~')
-
-SKIP = {'.cache','node_modules','.mozilla','.npm','.cargo','.rustup',
-        '.var','snap','.thunderbird','.local/share/Trash'}
-ALLOW_DOT = {'Desktop','Downloads','Documents','Pictures',
-             'Music','Videos','Public','Templates'}
-
-count = 0
-for root, dirs, files in os.walk(home):
-    dirs[:] = [d for d in dirs
-               if not (d.startswith('.') and d not in ALLOW_DOT)
-               and d not in SKIP]
-    for name in files + dirs:
-        path = os.path.join(root, name)
-        try:
-            f = Gio.File.new_for_path(path)
-            info = f.query_info('metadata::custom-icon',
-                Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, None)
-            val = info.get_attribute_string('metadata::custom-icon')
-            if val and f'Adwaita-{old}' in val:
-                f.set_attribute_string('metadata::custom-icon',
-                    val.replace(f'Adwaita-{old}', f'Adwaita-{new}'),
-                    Gio.FileAttributeType.STRING, None)
-                count += 1
-        except Exception:
-            pass
-
-if count:
-    sys.stderr.write(f'adwaita-colors:migrated {count} icon(s)\\n')
-`;
-
-        try {
-            const proc = new Gio.Subprocess({
-                argv: [pythonBin, '-c', script, oldColor, newColor],
-                flags: Gio.SubprocessFlags.STDERR_PIPE,
-            });
-            proc.init(null);
-            proc.wait_check_async(null, (p, result) => {
-                try {
-                    p.wait_check_finish(result);
-                } catch (e) {
-                    log(`[Adwaita Colors Home] Custom icon migration: ${e.message}`);
-                }
-            });
-        } catch (e) {
-            log(`[Adwaita Colors Home] Failed to start icon migration: ${e}`);
+        if (this._migrateSourceId) {
+            GLib.Source.remove(this._migrateSourceId);
+            this._migrateSourceId = 0;
         }
+
+        this._migrateOldColor = oldColor;
+        this._migrateNewColor = newColor;
+        this._migrateQueue = [GLib.get_home_dir()];
+        this._migrateCount = 0;
+        this._migrateSourceId = GLib.idle_add(GLib.PRIORITY_LOW,
+            () => this._migrateTick());
+    }
+
+    _migrateTick() {
+        const CHUNK = 48;
+        const skipDirs = new Set([
+            '.cache', 'node_modules', '.mozilla', '.npm', '.cargo',
+            '.rustup', '.var', 'snap', '.thunderbird',
+        ]);
+        const allowDot = new Set([
+            'Desktop', 'Downloads', 'Documents', 'Pictures',
+            'Music', 'Videos', 'Public', 'Templates',
+        ]);
+
+        for (let i = 0; i < CHUNK && this._migrateQueue.length > 0; i++) {
+            const dirPath = this._migrateQueue.shift();
+            let enumerator;
+            try {
+                const dir = Gio.File.new_for_path(dirPath);
+                enumerator = dir.enumerate_children(
+                    'standard::name,standard::type,metadata::custom-icon',
+                    Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null);
+            } catch (e) {
+                continue;
+            }
+
+            let info;
+            while ((info = enumerator.next_file(null)) !== null) {
+                const name = info.get_name();
+                const childPath = `${dirPath}/${name}`;
+
+                const icon = info.get_attribute_string('metadata::custom-icon');
+                if (icon && icon.includes(`Adwaita-${this._migrateOldColor}`)) {
+                    try {
+                        const child = Gio.File.new_for_path(childPath);
+                        child.set_attribute_string('metadata::custom-icon',
+                            icon.replace(
+                                `Adwaita-${this._migrateOldColor}`,
+                                `Adwaita-${this._migrateNewColor}`),
+                            Gio.FileAttributeType.STRING, null);
+                        this._migrateCount++;
+                    } catch (e) {
+                        // permission denied
+                    }
+                }
+
+                if (info.get_file_type() === Gio.FileType.DIRECTORY) {
+                    if (!name.startsWith('.') || allowDot.has(name)) {
+                        if (!skipDirs.has(name))
+                            this._migrateQueue.push(childPath);
+                    }
+                }
+            }
+        }
+
+        if (this._migrateQueue.length > 0) {
+            this._migrateSourceId = GLib.idle_add(GLib.PRIORITY_LOW,
+                () => this._migrateTick());
+            return GLib.SOURCE_REMOVE;
+        }
+
+        this._migrateSourceId = 0;
+        if (this._migrateCount > 0)
+            log(`[Adwaita Colors Home] Migrated ${this._migrateCount} custom icon(s)`);
+        return GLib.SOURCE_REMOVE;
     }
 
     _isThemeInstalled(themeName) {
