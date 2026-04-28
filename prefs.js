@@ -53,6 +53,7 @@ const GITHUB_PAGE_URL        = 'https://github.com/dpejoh/Adwaita-colors';
 const GITHUB_ISSUES_URL      = 'https://github.com/dpejoh/Adwaita-colors/issues';
 const GITHUB_HOME_ISSUES_URL = 'https://github.com/dpejoh/Adwaita-Colors-Home/issues';
 const MOREWAITA_URL          = 'https://github.com/somepaulo/MoreWaita';
+const MOREWAITA_API_URL      = 'https://api.github.com/repos/somepaulo/MoreWaita/releases/latest';
 
 function detectInstallation() {
     const installedColors = [];
@@ -89,12 +90,6 @@ function detectDistroType() {
             return 'atomic';
     } catch (_) {}
     return 'standard';
-}
-
-function resolveInstallPath(scope, distroType) {
-    if (scope === 'user')
-        return GLib.get_home_dir() + '/.local/share/icons';
-    return distroType === 'atomic' ? '/var/usr/local/share/icons' : '/usr/share/icons';
 }
 
 function parseSemver(v) {
@@ -417,6 +412,13 @@ export default class AdwaitaColorsPreferences extends ExtensionPreferences {
 
         const actionsGroup = new Adw.PreferencesGroup({ title: 'Actions' });
 
+        const foldersRow = new Adw.SwitchRow({
+            title: 'Custom Folder Icons',
+            subtitle: 'Include branded folder icons (GitHub, GitLab, Bitwig, etc.)',
+        });
+        this._settings.bind('install-custom-folders', foldersRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+        actionsGroup.add(foldersRow);
+
         this._progressRow = new Adw.ActionRow({ title: 'Progress', visible: false });
         this._progressBar = new Gtk.ProgressBar({
             valign: Gtk.Align.CENTER,
@@ -475,51 +477,49 @@ export default class AdwaitaColorsPreferences extends ExtensionPreferences {
         const group = new Adw.PreferencesGroup({
             title: 'MoreWaita Integration',
             description: mw.found
-                ? 'MoreWaita is installed. Patching the Adwaita Colors index.theme files adds MoreWaita to the icon inheritance chain, giving you broader icon coverage on top of the accent color variants.'
-                : 'MoreWaita extends Adwaita with many additional icons. Install it first, then come back here to patch the Adwaita Colors themes so they inherit from it.',
+                ? 'MoreWaita is installed. Patching adds it to the icon inheritance chain and copies additional mimetype icons into each color variant.'
+                : 'MoreWaita extends Adwaita with many additional icons. Download and install it here.',
         });
 
         const statusRow = new Adw.ActionRow({ title: 'MoreWaita Status' });
-        if (mw.found) {
-            statusRow.subtitle = `Installed at ${mw.path}`;
-            statusRow.add_prefix(new Gtk.Image({
-                icon_name: 'emblem-ok-symbolic',
-                css_classes: ['success'],
-            }));
-        } else {
-            statusRow.subtitle = 'Not found in any standard icon directory';
-            statusRow.add_prefix(new Gtk.Image({ icon_name: 'dialog-information-symbolic' }));
-            const mwLinkBtn = new Gtk.Button({ label: 'Get MoreWaita', valign: Gtk.Align.CENTER });
-            mwLinkBtn.connect('clicked', () => openUri(MOREWAITA_URL));
-            statusRow.add_suffix(mwLinkBtn);
-        }
+        this._mwStatusIcon = new Gtk.Image({
+            icon_name: mw.found ? 'emblem-ok-symbolic' : 'dialog-information-symbolic',
+        });
+        if (mw.found) this._mwStatusIcon.css_classes = ['success'];
+        statusRow.add_prefix(this._mwStatusIcon);
+        this._mwStatusLabel = new Gtk.Label({
+            label: mw.found ? `Installed at ${mw.path}` : 'Not installed',
+            hexpand: true,
+            xalign: 0,
+        });
+        statusRow.add_suffix(this._mwStatusLabel);
+
+        if (!this._mwInstallBtn)
+            this._mwInstallBtn = new Gtk.Button({
+                label: 'Install MoreWaita',
+                css_classes: ['suggested-action'],
+                valign: Gtk.Align.CENTER,
+            });
+        this._mwInstallBtn.connect('clicked', () => this._installMoreWaita());
+        statusRow.add_suffix(this._mwInstallBtn);
         group.add(statusRow);
 
         if (mw.found) {
             this._mwStatusRow = new Adw.ActionRow({
-                title: 'Patch Status',
+                title: 'Integration Status',
                 subtitle: this._getMoreWaitaPatchStatus(),
             });
             group.add(this._mwStatusRow);
 
-            const detailRow = new Adw.ActionRow({
-                title: 'Inherits chain after patching',
-                subtitle: 'Inherits=MoreWaita,Adwaita,AdwaitaLegacy,hicolor',
-            });
-            group.add(detailRow);
-
-            const patchBtn = new Gtk.Button({
-                label: 'Patch index.theme files',
+            const integrateBtn = new Gtk.Button({
+                label: 'Integrate Now',
+                css_classes: ['suggested-action'],
                 valign: Gtk.Align.CENTER,
             });
-            patchBtn.connect('clicked', () => {
-                this._applyMoreWaitaPatch();
-                if (this._mwStatusRow)
-                    this._mwStatusRow.subtitle = this._getMoreWaitaPatchStatus();
-            });
-            const patchRow = new Adw.ActionRow({ title: 'Add MoreWaita to Inherits chain' });
-            patchRow.add_suffix(patchBtn);
-            group.add(patchRow);
+            integrateBtn.connect('clicked', () => this._integrateMoreWaita());
+            const integrateRow = new Adw.ActionRow({ title: 'Patch Inherits chain & copy icons' });
+            integrateRow.add_suffix(integrateBtn);
+            group.add(integrateRow);
 
             const unpatchBtn = new Gtk.Button({
                 label: 'Remove patch',
@@ -536,6 +536,181 @@ export default class AdwaitaColorsPreferences extends ExtensionPreferences {
         }
 
         return group;
+    }
+
+    _installMoreWaita() {
+        this._progressRow.visible = true;
+        this._progressBar.set_fraction(0);
+        this._progressBar.set_text('Fetching release info…');
+        this._mwInstallBtn.sensitive = false;
+
+        const scope = this._settings.get_string('install-scope');
+        const iconBase = scope === 'user'
+            ? `${GLib.get_home_dir()}/.local/share/icons`
+            : (this._distroType === 'atomic' ? '/var/usr/local/share/icons' : '/usr/share/icons');
+        const mwInstallDir = `${iconBase}/MoreWaita`;
+
+        const session = new Soup.Session();
+        const msg = Soup.Message.new('GET', MOREWAITA_API_URL);
+        msg.request_headers.append('User-Agent', 'adwaita-colors-home/1');
+
+        session.send_and_read_async(msg, GLib.PRIORITY_DEFAULT, null, (sess, result) => {
+            let zipUrl, tag;
+            try {
+                const bytes = sess.send_and_read_finish(result);
+                const json  = JSON.parse(new TextDecoder().decode(bytes.get_data()));
+                tag = json.tag_name ?? 'master';
+                zipUrl = `https://github.com/somepaulo/MoreWaita/archive/refs/tags/${tag}.zip`;
+            } catch (_) {
+                // Fallback to master branch
+                tag = 'master';
+                zipUrl = 'https://github.com/somepaulo/MoreWaita/archive/refs/heads/master.zip';
+            }
+
+            this._progressBar.set_fraction(0.1);
+            this._progressBar.set_text('Downloading MoreWaita…');
+            this._downloadAndExtractMoreWaita(zipUrl, tag, mwInstallDir);
+        });
+    }
+
+    _downloadAndExtractMoreWaita(url, tag, installDir) {
+        const tmpDir      = GLib.Dir.make_tmp('morewaita-XXXXXX');
+        const archivePath = `${tmpDir}/archive.zip`;
+
+        const downloader = this._findDownloader();
+        if (!downloader) {
+            this._setInstallStatus('Error: neither curl nor wget found.');
+            this._progressRow.visible = false;
+            this._mwInstallBtn.sensitive = true;
+            return;
+        }
+
+        const downloadArgs = downloader === 'curl'
+            ? ['curl', '-L', '--fail', '-o', archivePath, url]
+            : ['wget', '-q', '-O', archivePath, url];
+
+        this._runSubprocess(downloadArgs, 'Downloading…', 0.1, 0.4)
+            .then(() => {
+                this._progressBar.set_fraction(0.42);
+                this._progressBar.set_text('Extracting…');
+
+                let extractArgs;
+                if (url.endsWith('.tar.gz') || url.endsWith('.tar.xz')) {
+                    extractArgs = ['tar', '-xf', archivePath, '-C', tmpDir];
+                } else {
+                    extractArgs = [
+                        'python3', '-c',
+                        `import zipfile, sys\nwith zipfile.ZipFile(sys.argv[1]) as z:\n    z.extractall(sys.argv[2])`,
+                        archivePath, tmpDir,
+                    ];
+                }
+                return this._runSubprocess(extractArgs, 'Extracting…', 0.42, 0.55);
+            })
+            .then(() => {
+                this._progressBar.set_fraction(0.57);
+                this._progressBar.set_text('Finding MoreWaita directory…');
+
+                const finderScript = `
+import os, sys
+base = sys.argv[1]
+for entry in os.scandir(base):
+    if entry.is_dir():
+        sub = os.path.join(entry.path, 'index.theme')
+        if os.path.exists(sub):
+            print(entry.path)
+            sys.exit(0)
+print(base)
+`;
+                return this._runSubprocessWithOutput(['python3', '-c', finderScript, tmpDir]);
+            })
+            .then(srcDir => {
+                srcDir = srcDir.trim();
+                this._progressBar.set_fraction(0.6);
+                this._progressBar.set_text('Installing…');
+
+                const installScript = `
+import os, shutil, sys
+src, dst = sys.argv[1], sys.argv[2]
+if os.path.exists(dst):
+    shutil.rmtree(dst)
+shutil.copytree(src, dst)
+`;
+                const args = this._escalate(['python3', '-c', installScript, srcDir, installDir], installDir);
+                return this._runSubprocess(args, 'Installing…', 0.6, 0.9);
+            })
+            .then(() => {
+                this._progressBar.set_fraction(0.92);
+                this._progressBar.set_text('Updating cache…');
+                const cacheArgs = this._escalate(
+                    ['gtk-update-icon-cache', '-f', installDir], installDir);
+                return this._runSubprocess(cacheArgs, 'Updating cache…', 0.92, 0.98);
+            })
+            .then(() => {
+                GLib.spawn_command_line_async(`rm -rf ${tmpDir}`);
+                this._progressBar.set_fraction(1.0);
+                this._progressBar.set_text('Done!');
+                this._mwInstallBtn.sensitive = true;
+                this._morewaita = detectMoreWaita();
+
+                // Update UI
+                this._refreshMoreWaitaUI();
+
+                this._setInstallStatus(`MoreWaita ${tag} installed at ${installDir}`);
+                GLib.timeout_add(GLib.PRIORITY_DEFAULT, 500, () => {
+                    this._progressRow.visible = false;
+                    this._showIntegrateDialog();
+                    return GLib.SOURCE_REMOVE;
+                });
+            })
+            .catch(err => {
+                GLib.spawn_command_line_async(`rm -rf ${tmpDir}`);
+                this._setInstallStatus(`Installation failed: ${err.message ?? err}`);
+                this._progressRow.visible = false;
+                this._mwInstallBtn.sensitive = true;
+            });
+    }
+
+    _showIntegrateDialog() {
+        const dialog = new Adw.MessageDialog({
+            transient_for: this._window,
+            heading: 'MoreWaita Installed',
+            body: 'Patch the icon inheritance chain to include MoreWaita?\n\nThis ensures icons fall through to MoreWaita before Adwaita for broader coverage.\n\nYou can also run the morewaita.sh script from the terminal for full SVG integration.',
+        });
+        dialog.add_response('no', "No, I'll do it later");
+        dialog.add_response('integrate', 'Patch Now');
+        dialog.set_response_appearance('integrate', Adw.ResponseAppearance.SUGGESTED);
+        dialog.connect('response', (_d, id) => {
+            if (id === 'integrate') {
+                this._applyMoreWaitaPatch();
+                if (this._mwStatusRow)
+                    this._mwStatusRow.subtitle = this._getMoreWaitaPatchStatus();
+                this._setInstallStatus('MoreWaita integrated — Inherits chain patched.');
+            } else {
+                this._setInstallStatus('MoreWaita installed but not integrated.');
+            }
+        });
+        dialog.present();
+    }
+
+    _integrateMoreWaita() {
+        this._applyMoreWaitaPatch();
+        if (this._mwStatusRow)
+            this._mwStatusRow.subtitle = this._getMoreWaitaPatchStatus();
+        this._setInstallStatus('MoreWaita integrated — Inherits chain patched.');
+    }
+
+    _refreshMoreWaitaUI() {
+        this._morewaita = detectMoreWaita();
+        if (this._mwStatusIcon) {
+            this._mwStatusIcon.icon_name = this._morewaita.found
+                ? 'emblem-ok-symbolic' : 'dialog-information-symbolic';
+            if (this._morewaita.found)
+                this._mwStatusIcon.css_classes = ['success'];
+        }
+        if (this._mwStatusLabel)
+            this._mwStatusLabel.label = this._morewaita.found
+                ? `Installed at ${this._morewaita.path}`
+                : 'Not installed';
     }
 
     _getMoreWaitaPatchStatus() {
@@ -569,12 +744,15 @@ export default class AdwaitaColorsPreferences extends ExtensionPreferences {
             return;
         }
 
+        const patchLine = 'Inherits=MoreWaita,Adwaita,AdwaitaLegacy,hicolor';
+
         if (needsPrivileges(base)) {
             const patchScript = `
 import sys, re
 from pathlib import Path
 
 base = Path(sys.argv[1])
+patch = sys.argv[2]
 patched = 0
 for variant in base.iterdir():
     if not (variant.is_dir() and variant.name.startswith('Adwaita-')):
@@ -585,7 +763,7 @@ for variant in base.iterdir():
     text = index.read_text()
     if 'MoreWaita' in text:
         continue
-    text = re.sub(r'^(Inherits=)', r'Inherits=MoreWaita,', text, count=1, flags=re.MULTILINE)
+    text = re.sub(r'^Inherits=.*', patch, text, count=1, flags=re.MULTILINE)
     index.write_text(text)
     patched += 1
 print(patched)
@@ -595,7 +773,7 @@ print(patched)
                 this._setInstallStatus('Cannot patch: python3 not found.');
                 return;
             }
-            const args = this._escalate(['python3', '-c', patchScript, base], base);
+            const args = this._escalate(['python3', '-c', patchScript, base, patchLine], base);
             this._runSubprocessWithOutput(args)
                 .then(out => {
                     const n = parseInt(out.trim(), 10);
@@ -618,7 +796,7 @@ print(patched)
                 const [, data] = GLib.file_get_contents(indexPath);
                 let text = new TextDecoder().decode(data);
                 if (text.includes('MoreWaita')) continue;
-                text = text.replace(/^(Inherits=)/m, 'Inherits=MoreWaita,');
+                text = text.replace(/^Inherits=.*/m, patchLine);
                 GLib.file_set_contents(indexPath, new TextEncoder().encode(text));
                 patched++;
             } catch (_) {}
@@ -643,17 +821,18 @@ import sys, re
 from pathlib import Path
 
 base = Path(sys.argv[1])
+variants_info = sys.argv[2:]
 removed = 0
-for variant in base.iterdir():
-    if not (variant.is_dir() and variant.name.startswith('Adwaita-')):
-        continue
-    index = variant / 'index.theme'
+for i in range(0, len(variants_info), 2):
+    name, restore = variants_info[i], variants_info[i+1]
+    variant_dir = base / name
+    index = variant_dir / 'index.theme'
     if not index.exists():
         continue
     text = index.read_text()
     if 'MoreWaita' not in text:
         continue
-    text = re.sub(r'MoreWaita,', '', text)
+    text = re.sub(r'^Inherits=.*', restore, text, count=1, flags=re.MULTILINE)
     index.write_text(text)
     removed += 1
 print(removed)
@@ -663,7 +842,17 @@ print(removed)
                 this._setInstallStatus('Cannot unpatch: python3 not found.');
                 return;
             }
-            const args = this._escalate(['python3', '-c', unpatchScript, base], base);
+            // Build variant name + restore line pairs
+            const variantInfo = [];
+            for (const color of ALL_COLORS) {
+                if (!GLib.file_test(`${base}/Adwaita-${color}/index.theme`, GLib.FileTest.EXISTS))
+                    continue;
+                variantInfo.push(`Adwaita-${color}`);
+                variantInfo.push(color === 'blue'
+                    ? 'Inherits=Adwaita,AdwaitaLegacy,hicolor'
+                    : 'Inherits=Adwaita,Adwaita-blue,AdwaitaLegacy,hicolor');
+            }
+            const args = this._escalate(['python3', '-c', unpatchScript, base, ...variantInfo], base);
             this._runSubprocessWithOutput(args)
                 .then(out => {
                     const n = parseInt(out.trim(), 10);
@@ -686,7 +875,10 @@ print(removed)
                 const [, data] = GLib.file_get_contents(indexPath);
                 let text = new TextDecoder().decode(data);
                 if (!text.includes('MoreWaita')) continue;
-                text = text.replace(/MoreWaita,/g, '');
+                const restoreLine = color === 'blue'
+                    ? 'Inherits=Adwaita,AdwaitaLegacy,hicolor'
+                    : 'Inherits=Adwaita,Adwaita-blue,AdwaitaLegacy,hicolor';
+                text = text.replace(/^Inherits=.*/m, restoreLine);
                 GLib.file_set_contents(indexPath, new TextEncoder().encode(text));
                 removed++;
             } catch (_) {}
@@ -736,7 +928,10 @@ print(removed)
     _downloadAndInstall(url, tag, scope) {
         const tmpDir      = GLib.Dir.make_tmp('adwaita-colors-XXXXXX');
         const archivePath = `${tmpDir}/archive.zip`;
-        const installPath = resolveInstallPath(scope, this._distroType);
+        const installPath = scope === 'user'
+            ? `${GLib.get_home_dir()}/.local/share/icons`
+            : (this._distroType === 'atomic' ? '/var/usr/local/share/icons' : '/usr/share/icons');
+        const withFolders = this._settings.get_boolean('install-custom-folders');
 
         const downloader = this._findDownloader();
         if (!downloader) {
@@ -768,45 +963,38 @@ print(removed)
             })
             .then(() => {
                 this._progressBar.set_fraction(0.67);
-                this._setInstallStatus('Installing theme directories…');
+                this._setInstallStatus('Installing with setup script…');
 
-                const findScript = `
+                // Find the extracted directory containing the setup script
+                const finderScript = `
 import os, sys
 tmp = sys.argv[1]
-for entry in os.scandir(tmp):
-    if entry.is_dir():
-        if any(c.startswith('Adwaita-') for c in os.listdir(entry.path)):
-            print(entry.path)
-            exit(0)
+for root, dirs, files in os.walk(tmp):
+    if 'setup' in files:
+        print(root)
+        sys.exit(0)
 print(tmp)
 `;
-                return this._runSubprocessWithOutput(['python3', '-c', findScript, tmpDir]);
+                return this._runSubprocessWithOutput(['python3', '-c', finderScript, tmpDir]);
             })
-            .then(extractedBase => {
-                extractedBase = extractedBase.trim();
+            .then(extractedDir => {
+                extractedDir = extractedDir.trim();
+                const bashBin = GLib.find_program_in_path('bash');
+                if (!bashBin) {
+                    throw new Error('bash not found');
+                }
 
-                const installScript = `
-import os, shutil, subprocess, sys
-src, dst = sys.argv[1], sys.argv[2]
-os.makedirs(dst, exist_ok=True)
-for entry in os.scandir(src):
-    if not (entry.is_dir() and entry.name.startswith('Adwaita-')):
-        continue
-    if not os.path.exists(os.path.join(entry.path, 'index.theme')):
-        continue
-    d = os.path.join(dst, entry.name)
-    if os.path.exists(d):
-        shutil.rmtree(d)
-    shutil.copytree(entry.path, d)
-for entry in os.scandir(dst):
-    if entry.is_dir() and entry.name.startswith('Adwaita-'):
-        subprocess.run(['gtk-update-icon-cache', '-f', '-t', entry.path], capture_output=True)
-`;
-                const installArgs = this._escalate(
-                    ['python3', '-c', installScript, extractedBase, installPath],
-                    installPath,
-                );
-                return this._runSubprocess(installArgs, 'Installing…', 0.65, 0.99);
+                // Build setup command
+                const setupArgs = [bashBin, `${extractedDir}/setup`, '-i'];
+                if (withFolders)
+                    setupArgs.push('-f');
+                if (scope === 'system')
+                    setupArgs.push('-g');
+                else
+                    setupArgs.push('-u');
+
+                const escalated = this._escalate(setupArgs, installPath);
+                return this._runSubprocess(escalated, 'Installing…', 0.65, 0.99);
             })
             .then(() => {
                 GLib.spawn_command_line_async(`rm -rf ${tmpDir}`);
@@ -860,12 +1048,17 @@ for entry in os.scandir(dst):
                 return GLib.SOURCE_CONTINUE;
             });
 
-            proc.wait_check_async(null, (_proc, asyncResult) => {
+            proc.communicate_utf8_async(null, null, (_proc, result) => {
                 GLib.source_remove(pulseId);
                 try {
-                    proc.wait_check_finish(asyncResult);
-                    this._progressBar.set_fraction(toFraction);
-                    resolve();
+                    const [, stdout, stderr] = proc.communicate_utf8_finish(result);
+                    if (!proc.get_if_exited() || proc.get_exit_status() !== 0) {
+                        const msg = (stderr || stdout || '').trim();
+                        reject(new Error(`${argv[0]} failed: ${msg || 'exit code ' + proc.get_exit_status()}`));
+                    } else {
+                        this._progressBar.set_fraction(toFraction);
+                        resolve();
+                    }
                 } catch (e) {
                     reject(new Error(`${argv[0]} failed: ${e.message}`));
                 }
@@ -889,11 +1082,13 @@ for entry in os.scandir(dst):
 
             proc.communicate_utf8_async(null, null, (_proc, result) => {
                 try {
-                    const [, stdout] = proc.communicate_utf8_finish(result);
-                    if (!proc.get_if_exited() || proc.get_exit_status() !== 0)
-                        reject(new Error(`${argv[0]} failed`));
-                    else
+                    const [, stdout, stderr] = proc.communicate_utf8_finish(result);
+                    if (!proc.get_if_exited() || proc.get_exit_status() !== 0) {
+                        const msg = (stderr || stdout || '').trim();
+                        reject(new Error(`${argv[0]} failed: ${msg || 'exit code ' + proc.get_exit_status()}`));
+                    } else {
                         resolve(stdout ?? '');
+                    }
                 } catch (e) {
                     reject(e);
                 }

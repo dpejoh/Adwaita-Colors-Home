@@ -57,5 +57,11 @@
       <description>Override the default installation directory. Leave empty for automatic detection.</description>
     </key>
 
+    <key name="install-custom-folders" type="b">
+      <default>false</default>
+      <summary>Include custom folder icons when installing</summary>
+      <description>When enabled, branded folder icons (GitHub, GitLab, etc.) are included during install.</description>
+    </key>
+
   </schema>
 </schemalist>
