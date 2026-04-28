@@ -354,7 +354,8 @@ export default class AdwaitaColorsHome extends Extension {
         }
 
         if (this._migrateQueue.length > 0) {
-            this._migrateSourceId = null;
+            if (this._migrateSourceId)
+                GLib.Source.remove(this._migrateSourceId);
             this._migrateSourceId = GLib.idle_add(GLib.PRIORITY_LOW,
                 () => this._migrateTick());
             return GLib.SOURCE_REMOVE;
