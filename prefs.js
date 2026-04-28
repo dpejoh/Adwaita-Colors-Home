@@ -265,6 +265,13 @@ export default class AdwaitaColorsPreferences extends ExtensionPreferences {
         updateSensitivity();
         themeGroup.add(colorRow);
 
+        const carryOverRow = new Adw.SwitchRow({
+            title: 'Carry Over Custom Folder Icons',
+            subtitle: 'Update custom folder icons when switching between Adwaita Colors variants so they always match the active theme.',
+        });
+        this._settings.bind('carry-over-custom-icons', carryOverRow, 'active', Gio.SettingsBindFlags.DEFAULT);
+        themeGroup.add(carryOverRow);
+
         const indicatorRow = new Adw.SwitchRow({
             title: 'Show Panel Color Indicator',
             subtitle: 'Display a colored circle in the top bar for quick color switching.',

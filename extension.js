@@ -162,6 +162,8 @@ export default class AdwaitaColorsHome extends Extension {
                 else
                     this._destroyIndicator();
             });
+        this._carryOverChangedId = this._settings.connect(
+            'changed::carry-over-custom-icons', () => this._syncIconTheme());
 
         // Save the icon theme so it can be restored when the extension is disabled
         this._originalIconTheme = this._desktopSettings.get_string('icon-theme');
@@ -194,6 +196,7 @@ export default class AdwaitaColorsHome extends Extension {
         this._settings.disconnect(this._autoSyncChangedId);
         this._settings.disconnect(this._manualColorChangedId);
         this._settings.disconnect(this._showIndicatorChangedId);
+        this._settings.disconnect(this._carryOverChangedId);
 
         this._destroyIndicator();
 
@@ -262,11 +265,82 @@ export default class AdwaitaColorsHome extends Extension {
             return false;
 
         if (current !== themeName) {
+            this._migrateCustomIcons(current, themeName);
             this._desktopSettings.set_string('icon-theme', themeName);
             this._indicator?.refresh();
         }
         
         return true;
+    }
+
+    _migrateCustomIcons(oldTheme, newTheme) {
+        if (!this._settings.get_boolean('carry-over-custom-icons'))
+            return;
+
+        const oldColor = oldTheme.startsWith('Adwaita-') ? oldTheme.slice(8) : null;
+        const newColor = newTheme.startsWith('Adwaita-') ? newTheme.slice(8) : null;
+
+        if (!oldColor || !newColor || oldColor === newColor)
+            return;
+
+        const pythonBin = GLib.find_program_in_path('python3');
+        if (!pythonBin) return;
+
+        const script = `
+import os, sys
+import gi
+gi.require_version('Gio', '2.0')
+from gi.repository import Gio
+
+old = sys.argv[1]
+new = sys.argv[2]
+home = os.path.expanduser('~')
+
+SKIP = {'.cache','node_modules','.mozilla','.npm','.cargo','.rustup',
+        '.var','snap','.thunderbird','.local/share/Trash'}
+ALLOW_DOT = {'Desktop','Downloads','Documents','Pictures',
+             'Music','Videos','Public','Templates'}
+
+count = 0
+for root, dirs, files in os.walk(home):
+    dirs[:] = [d for d in dirs
+               if not (d.startswith('.') and d not in ALLOW_DOT)
+               and d not in SKIP]
+    for name in files + dirs:
+        path = os.path.join(root, name)
+        try:
+            f = Gio.File.new_for_path(path)
+            info = f.query_info('metadata::custom-icon',
+                Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, None)
+            val = info.get_attribute_string('metadata::custom-icon')
+            if val and f'Adwaita-{old}' in val:
+                f.set_attribute_string('metadata::custom-icon',
+                    val.replace(f'Adwaita-{old}', f'Adwaita-{new}'),
+                    Gio.FileAttributeType.STRING, None)
+                count += 1
+        except Exception:
+            pass
+
+if count:
+    sys.stderr.write(f'adwaita-colors:migrated {count} icon(s)\\n')
+`;
+
+        try {
+            const proc = new Gio.Subprocess({
+                argv: [pythonBin, '-c', script, oldColor, newColor],
+                flags: Gio.SubprocessFlags.STDERR_PIPE,
+            });
+            proc.init(null);
+            proc.wait_check_async(null, (p, result) => {
+                try {
+                    p.wait_check_finish(result);
+                } catch (e) {
+                    log(`[Adwaita Colors Home] Custom icon migration: ${e.message}`);
+                }
+            });
+        } catch (e) {
+            log(`[Adwaita Colors Home] Failed to start icon migration: ${e}`);
+        }
     }
 
     _isThemeInstalled(themeName) {

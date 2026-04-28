@@ -45,6 +45,12 @@
       <description>Display a colored circle in the top panel for quick color switching.</description>
     </key>
 
+    <key name="carry-over-custom-icons" type="b">
+      <default>true</default>
+      <summary>Carry over custom folder icons when changing color variants</summary>
+      <description>When switching between Adwaita Colors variants, automatically update any custom folder icons that reference the old variant to use the new variant instead, so they continue to match the active theme.</description>
+    </key>
+
     <key name="custom-install-path" type="s">
       <default>''</default>
       <summary>Custom icon install path (empty = auto-detect)</summary>
