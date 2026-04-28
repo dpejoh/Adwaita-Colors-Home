@@ -560,11 +560,11 @@ export default class AdwaitaColorsPreferences extends ExtensionPreferences {
                 const bytes = sess.send_and_read_finish(result);
                 const json  = JSON.parse(new TextDecoder().decode(bytes.get_data()));
                 tag = json.tag_name ?? 'master';
-                zipUrl = `https://github.com/somepaulo/MoreWaita/archive/refs/tags/${tag}.zip`;
+                zipUrl = `https://github.com/somepaulo/MoreWaita/archive/refs/tags/${tag}.tar.gz`;
             } catch (_) {
                 // Fallback to master branch
                 tag = 'master';
-                zipUrl = 'https://github.com/somepaulo/MoreWaita/archive/refs/heads/master.zip';
+                zipUrl = 'https://github.com/somepaulo/MoreWaita/archive/refs/heads/master.tar.gz';
             }
 
             this._progressBar.set_fraction(0.1);
@@ -594,31 +594,21 @@ export default class AdwaitaColorsPreferences extends ExtensionPreferences {
                 this._progressBar.set_fraction(0.42);
                 this._progressBar.set_text('Extracting…');
 
-                let extractArgs;
-                if (url.endsWith('.tar.gz') || url.endsWith('.tar.xz')) {
-                    extractArgs = ['tar', '-xf', archivePath, '-C', tmpDir];
-                } else {
-                    extractArgs = [
-                        'python3', '-c',
-                        `import zipfile, sys\nwith zipfile.ZipFile(sys.argv[1]) as z:\n    z.extractall(sys.argv[2])`,
-                        archivePath, tmpDir,
-                    ];
-                }
+                // Use tar.gz to preserve symlinks (GitHub's ZIP doesn't preserve them)
+                const extractArgs = ['tar', '-xf', archivePath, '-C', tmpDir];
                 return this._runSubprocess(extractArgs, 'Extracting…', 0.42, 0.55);
             })
             .then(() => {
                 this._progressBar.set_fraction(0.57);
-                this._progressBar.set_text('Finding MoreWaita directory…');
+                this._progressBar.set_text('Finding install.sh…');
 
                 const finderScript = `
 import os, sys
 base = sys.argv[1]
-for entry in os.scandir(base):
-    if entry.is_dir():
-        sub = os.path.join(entry.path, 'index.theme')
-        if os.path.exists(sub):
-            print(entry.path)
-            sys.exit(0)
+for root, dirs, files in os.walk(base):
+    if 'install.sh' in files:
+        print(root)
+        sys.exit(0)
 print(base)
 `;
                 return this._runSubprocessWithOutput(['python3', '-c', finderScript, tmpDir]);
@@ -626,24 +616,17 @@ print(base)
             .then(srcDir => {
                 srcDir = srcDir.trim();
                 this._progressBar.set_fraction(0.6);
-                this._progressBar.set_text('Installing…');
+                this._progressBar.set_text('Installing with MoreWaita install.sh…');
 
-                const installScript = `
-import os, shutil, sys
-src, dst = sys.argv[1], sys.argv[2]
-if os.path.exists(dst):
-    shutil.rmtree(dst)
-shutil.copytree(src, dst)
-`;
-                const args = this._escalate(['python3', '-c', installScript, srcDir, installDir], installDir);
-                return this._runSubprocess(args, 'Installing…', 0.6, 0.9);
-            })
-            .then(() => {
-                this._progressBar.set_fraction(0.92);
-                this._progressBar.set_text('Updating cache…');
-                const cacheArgs = this._escalate(
-                    ['gtk-update-icon-cache', '-f', installDir], installDir);
-                return this._runSubprocess(cacheArgs, 'Updating cache…', 0.92, 0.98);
+                const envBin = GLib.find_program_in_path('env');
+                const bashBin = GLib.find_program_in_path('bash');
+                if (!bashBin || !envBin)
+                    throw new Error('bash or env not found');
+
+                // MoreWaita's install.sh uses THEMEDIR env var and cp -a to preserve symlinks
+                const argv = [envBin, `THEMEDIR=${installDir}`, bashBin, `${srcDir}/install.sh`];
+                const escalated = this._escalate(argv, installDir);
+                return this._runSubprocess(escalated, 'Installing…', 0.6, 0.95);
             })
             .then(() => {
                 GLib.spawn_command_line_async(`rm -rf ${tmpDir}`);
@@ -652,7 +635,6 @@ shutil.copytree(src, dst)
                 this._mwInstallBtn.sensitive = true;
                 this._morewaita = detectMoreWaita();
 
-                // Update UI
                 this._refreshMoreWaitaUI();
 
                 this._setInstallStatus(`MoreWaita ${tag} installed at ${installDir}`);
@@ -749,7 +731,9 @@ shutil.copytree(src, dst)
             return;
         }
 
-        const patchLine = 'Inherits=MoreWaita,Adwaita,AdwaitaLegacy,hicolor';
+        const getPatchLine = (color) => color === 'blue'
+            ? 'Inherits=MoreWaita,Adwaita,AdwaitaLegacy,hicolor'
+            : 'Inherits=MoreWaita,Adwaita,Adwaita-blue,AdwaitaLegacy,hicolor';
 
         if (needsPrivileges(base)) {
             const patchScript = `
@@ -757,12 +741,12 @@ import sys, re
 from pathlib import Path
 
 base = Path(sys.argv[1])
-patch = sys.argv[2]
 patched = 0
-for variant in base.iterdir():
-    if not (variant.is_dir() and variant.name.startswith('Adwaita-')):
-        continue
-    index = variant / 'index.theme'
+# Args come in pairs: variant_name, patch_line
+args = sys.argv[2:]
+for i in range(0, len(args), 2):
+    name, patch = args[i], args[i+1]
+    index = base / name / 'index.theme'
     if not index.exists():
         continue
     text = index.read_text()
@@ -778,7 +762,14 @@ print(patched)
                 this._setInstallStatus('Cannot patch: python3 not found.');
                 return;
             }
-            const args = this._escalate(['python3', '-c', patchScript, base, patchLine], base);
+            // Build variant name + patch line pairs
+            const variantArgs = [];
+            for (const color of ALL_COLORS) {
+                if (!GLib.file_test(`${base}/Adwaita-${color}/index.theme`, GLib.FileTest.EXISTS))
+                    continue;
+                variantArgs.push(`Adwaita-${color}`, getPatchLine(color));
+            }
+            const args = this._escalate(['python3', '-c', patchScript, base, ...variantArgs], base);
             this._runSubprocessWithOutput(args)
                 .then(out => {
                     const n = parseInt(out.trim(), 10);
@@ -801,7 +792,7 @@ print(patched)
                 const [, data] = GLib.file_get_contents(indexPath);
                 let text = new TextDecoder().decode(data);
                 if (text.includes('MoreWaita')) continue;
-                text = text.replace(/^Inherits=.*/m, patchLine);
+                text = text.replace(/^Inherits=.*/m, getPatchLine(color));
                 GLib.file_set_contents(indexPath, new TextEncoder().encode(text));
                 patched++;
             } catch (_) {}
@@ -896,101 +887,31 @@ print(removed)
     }
 
     _startInstall(scope, versionOverride) {
+        const localRepo = `${GLib.get_home_dir()}/code/Adwaita-colors`;
+
         this._progressRow.visible = true;
         this._progressBar.set_fraction(0);
-        this._progressBar.set_text('Fetching release info…');
-        this._setInstallStatus('Fetching latest release info from GitHub…');
+        this._progressBar.set_text('Copying from local repo…');
+        this._setInstallStatus('Copying Adwaita Colors from local repository…');
 
-        const session = new Soup.Session();
-        const msg = Soup.Message.new('GET', GITHUB_API_URL);
-        msg.request_headers.append('User-Agent', 'adwaita-colors-home/1');
-
-        session.send_and_read_async(msg, GLib.PRIORITY_DEFAULT, null, (sess, result) => {
-            let zipUrl, tag;
-            try {
-                const bytes = sess.send_and_read_finish(result);
-                const json  = JSON.parse(new TextDecoder().decode(bytes.get_data()));
-                tag = versionOverride ?? json.tag_name;
-
-                const asset = json.assets?.find(a =>
-                    a.name.endsWith('.zip') ||
-                    a.name.endsWith('.tar.gz') ||
-                    a.name.endsWith('.tar.xz'));
-                zipUrl = asset?.browser_download_url
-                    ?? `https://github.com/dpejoh/Adwaita-colors/archive/refs/tags/${tag}.zip`;
-            } catch (e) {
-                this._setInstallStatus(`Error fetching release info: ${e.message}`);
-                this._progressRow.visible = false;
-                return;
-            }
-
-            this._progressBar.set_fraction(0.1);
-            this._setInstallStatus(`Downloading Adwaita Colors ${tag}…`);
-            this._downloadAndInstall(zipUrl, tag, scope);
-        });
-    }
-
-    _downloadAndInstall(url, tag, scope) {
-        const tmpDir      = GLib.Dir.make_tmp('adwaita-colors-XXXXXX');
-        const archivePath = `${tmpDir}/archive.zip`;
         const installPath = scope === 'user'
             ? `${GLib.get_home_dir()}/.local/share/icons`
             : (this._distroType === 'atomic' ? '/var/usr/local/share/icons' : '/usr/share/icons');
         const withFolders = this._settings.get_boolean('install-custom-folders');
+        const tmpDir = GLib.Dir.make_tmp('adwaita-colors-XXXXXX');
 
-        const downloader = this._findDownloader();
-        if (!downloader) {
-            this._setInstallStatus('Error: neither curl nor wget found. Install one with: sudo dnf install curl');
-            this._progressRow.visible = false;
-            return;
-        }
-
-        const downloadArgs = downloader === 'curl'
-            ? ['curl', '-L', '--fail', '-o', archivePath, url]
-            : ['wget', '-q', '-O', archivePath, url];
-
-        this._runSubprocess(downloadArgs, 'Downloading…', 0.1, 0.4)
+        const copyArgs = ['cp', '-r', '--dereference', localRepo, tmpDir];
+        this._runSubprocess(copyArgs, 'Copying…', 0, 0.3)
             .then(() => {
-                this._progressBar.set_fraction(0.42);
-                this._setInstallStatus('Extracting archive…');
+                this._progressBar.set_fraction(0.35);
+                this._progressBar.set_text('Installing…');
 
-                let extractArgs;
-                if (url.endsWith('.tar.gz') || url.endsWith('.tar.xz')) {
-                    extractArgs = ['tar', '-xf', archivePath, '-C', tmpDir];
-                } else {
-                    extractArgs = [
-                        'python3', '-c',
-                        `import zipfile, sys\nwith zipfile.ZipFile(sys.argv[1]) as z:\n    z.extractall(sys.argv[2])`,
-                        archivePath, tmpDir,
-                    ];
-                }
-                return this._runSubprocess(extractArgs, 'Extracting…', 0.42, 0.65);
-            })
-            .then(() => {
-                this._progressBar.set_fraction(0.67);
-                this._setInstallStatus('Installing with setup script…');
-
-                // Find the extracted directory containing the setup script
-                const finderScript = `
-import os, sys
-tmp = sys.argv[1]
-for root, dirs, files in os.walk(tmp):
-    if 'setup' in files:
-        print(root)
-        sys.exit(0)
-print(tmp)
-`;
-                return this._runSubprocessWithOutput(['python3', '-c', finderScript, tmpDir]);
-            })
-            .then(extractedDir => {
-                extractedDir = extractedDir.trim();
                 const bashBin = GLib.find_program_in_path('bash');
-                if (!bashBin) {
+                if (!bashBin)
                     throw new Error('bash not found');
-                }
 
-                // Build setup command
-                const setupArgs = [bashBin, `${extractedDir}/setup`, '-i'];
+                const repoDir = `${tmpDir}/Adwaita-colors`;
+                const setupArgs = [bashBin, `${repoDir}/setup`, '-i'];
                 if (withFolders)
                     setupArgs.push('-f');
                 if (scope === 'system')
@@ -999,15 +920,21 @@ print(tmp)
                     setupArgs.push('-u');
 
                 const escalated = this._escalate(setupArgs, installPath);
-                return this._runSubprocess(escalated, 'Installing…', 0.65, 0.99);
+                return this._runSubprocess(escalated, 'Installing…', 0.35, 0.95);
             })
             .then(() => {
                 GLib.spawn_command_line_async(`rm -rf ${tmpDir}`);
                 this._progressBar.set_fraction(1.0);
                 this._progressBar.set_text('Done!');
-                this._settings.set_string('installed-version', tag);
-                this._setInstallStatus(`Adwaita Colors ${tag} installed at ${installPath}`);
+                this._settings.set_string('installed-version', 'local');
+                this._setInstallStatus(`Adwaita Colors installed at ${installPath}`);
                 this._installation = detectInstallation();
+
+                // Sync icon theme to current accent color
+                if (this._hasAccentColor) {
+                    const accent = this._desktopSettings.get_string('accent-color');
+                    this._settings.set_string('manual-color', accent === 'default' ? 'blue' : accent);
+                }
 
                 GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2500, () => {
                     this._progressRow.visible = false;
@@ -1020,7 +947,6 @@ print(tmp)
                 this._progressRow.visible = false;
             });
     }
-
     _escalate(argv, targetPath) {
         if (!needsPrivileges(targetPath))
             return argv;
