@@ -676,6 +676,20 @@ print(base)
 
     _integrateMoreWaita() {
         this._applyMoreWaitaPatch();
+
+        // Clear icon cache for each variant so the new Inherits chain takes effect
+        const base = this._installation?.path;
+        if (base && GLib.file_test(base, GLib.FileTest.IS_DIR)) {
+            for (const color of ALL_COLORS) {
+                const variantDir = `${base}/Adwaita-${color}`;
+                if (GLib.file_test(variantDir, GLib.FileTest.IS_DIR)) {
+                    const cacheArgs = this._escalate(
+                        ['gtk-update-icon-cache', '-f', variantDir], variantDir);
+                    this._runSubprocess(cacheArgs, '', 0, 0).catch(() => {});
+                }
+            }
+        }
+
         this._refreshMoreWaitaIntegrationUI();
         this._setInstallStatus('MoreWaita integrated — Inherits chain patched.');
     }
@@ -930,10 +944,13 @@ print(removed)
                 this._setInstallStatus(`Adwaita Colors installed at ${installPath}`);
                 this._installation = detectInstallation();
 
-                // Sync icon theme to current accent color
+                // Apply the matching icon theme for the current accent color
                 if (this._hasAccentColor) {
                     const accent = this._desktopSettings.get_string('accent-color');
-                    this._settings.set_string('manual-color', accent === 'default' ? 'blue' : accent);
+                    const color = accent === 'default' ? 'blue' : accent;
+                    const themeName = `Adwaita-${color}`;
+                    if (this._desktopSettings.get_string('icon-theme') !== themeName)
+                        this._desktopSettings.set_string('icon-theme', themeName);
                 }
 
                 GLib.timeout_add(GLib.PRIORITY_DEFAULT, 2500, () => {
